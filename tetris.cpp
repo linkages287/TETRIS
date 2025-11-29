@@ -135,8 +135,10 @@ public:
     int level;
     bool game_over;
     bool paused;
+    bool ai_enabled;
     double fall_delay;
     std::chrono::steady_clock::time_point last_fall_time;
+    std::chrono::steady_clock::time_point last_ai_time;
     
     TetrisGame() 
         : board(HEIGHT, std::vector<int>(WIDTH, 0)),
@@ -147,8 +149,10 @@ public:
           level(1),
           game_over(false),
           paused(false),
+          ai_enabled(false),
           fall_delay(0.5),
-          last_fall_time(std::chrono::steady_clock::now()) {
+          last_fall_time(std::chrono::steady_clock::now()),
+          last_ai_time(std::chrono::steady_clock::now()) {
         spawnPiece();
     }
     
@@ -306,6 +310,230 @@ public:
             last_fall_time = current_time;
         }
     }
+    
+    void executeAIMove(int rotation, int x_pos) {
+        if (current_piece == nullptr) return;
+        
+        // Rotate to desired rotation
+        while (current_piece->rotation != rotation) {
+            rotatePiece();
+        }
+        
+        // Move to desired x position
+        int target_x = x_pos;
+        while (current_piece->x < target_x && movePiece(1, 0)) {}
+        while (current_piece->x > target_x && movePiece(-1, 0)) {}
+        
+        // Hard drop
+        hardDrop();
+    }
+    
+    // AI helper methods
+    std::vector<std::vector<int>> simulatePlacePiece(const TetrisPiece& piece, int drop_y) const {
+        std::vector<std::vector<int>> sim_board = board;
+        std::vector<Point> blocks = piece.getBlocks();
+        for (const auto& block : blocks) {
+            int y = block.y + drop_y - piece.y;
+            int x = block.x;
+            if (y >= 0 && y < HEIGHT && x >= 0 && x < WIDTH) {
+                sim_board[y][x] = piece.color;
+            }
+        }
+        return sim_board;
+    }
+    
+    int simulateClearLines(std::vector<std::vector<int>>& sim_board) const {
+        std::vector<int> lines_to_clear;
+        for (int y = 0; y < HEIGHT; y++) {
+            bool full = true;
+            for (int x = 0; x < WIDTH; x++) {
+                if (sim_board[y][x] == 0) {
+                    full = false;
+                    break;
+                }
+            }
+            if (full) {
+                lines_to_clear.push_back(y);
+            }
+        }
+        
+        for (auto it = lines_to_clear.rbegin(); it != lines_to_clear.rend(); ++it) {
+            sim_board.erase(sim_board.begin() + *it);
+            sim_board.insert(sim_board.begin(), std::vector<int>(WIDTH, 0));
+        }
+        
+        return lines_to_clear.size();
+    }
+    
+    int getColumnHeight(int x, const std::vector<std::vector<int>>& sim_board) const {
+        for (int y = 0; y < HEIGHT; y++) {
+            if (sim_board[y][x] != 0) {
+                return HEIGHT - y;
+            }
+        }
+        return 0;
+    }
+    
+    int countHoles(const std::vector<std::vector<int>>& sim_board) const {
+        int holes = 0;
+        for (int x = 0; x < WIDTH; x++) {
+            bool block_found = false;
+            for (int y = 0; y < HEIGHT; y++) {
+                if (sim_board[y][x] != 0) {
+                    block_found = true;
+                } else if (block_found) {
+                    holes++;
+                }
+            }
+        }
+        return holes;
+    }
+    
+    int calculateBumpiness(const std::vector<std::vector<int>>& sim_board) const {
+        int bumpiness = 0;
+        for (int x = 0; x < WIDTH - 1; x++) {
+            int h1 = getColumnHeight(x, sim_board);
+            int h2 = getColumnHeight(x + 1, sim_board);
+            bumpiness += abs(h1 - h2);
+        }
+        return bumpiness;
+    }
+    
+    int getAggregateHeight(const std::vector<std::vector<int>>& sim_board) const {
+        int height = 0;
+        for (int x = 0; x < WIDTH; x++) {
+            height += getColumnHeight(x, sim_board);
+        }
+        return height;
+    }
+};
+
+// AI Player class
+class TetrisAI {
+public:
+    struct Move {
+        int rotation;
+        int x;
+        double score;
+    };
+    
+    // Heuristic weights (tuned for good gameplay)
+    static constexpr double WEIGHT_AGGREGATE_HEIGHT = -0.510066;
+    static constexpr double WEIGHT_COMPLETE_LINES = 0.760666;
+    static constexpr double WEIGHT_HOLES = -0.35663;
+    static constexpr double WEIGHT_BUMPINESS = -0.184483;
+    static constexpr double WEIGHT_LANDING_HEIGHT = -0.1;
+    
+    Move findBestMove(const TetrisGame& game) {
+        if (game.current_piece == nullptr) {
+            return {0, 0, -999999};
+        }
+        
+        Move best_move = {0, 0, -999999};
+        TetrisPiece piece = *game.current_piece;
+        
+        // Try all rotations
+        for (int rot = 0; rot < 4; rot++) {
+            piece.rotation = rot;
+            
+            // Try all horizontal positions
+            for (int x = -4; x < game.WIDTH + 4; x++) {
+                piece.x = x;
+                piece.y = 0;
+                
+                // Check if starting position is valid
+                if (game.checkCollision(piece)) {
+                    continue;
+                }
+                
+                // Find drop position
+                int drop_y = 0;
+                while (!game.checkCollision(piece, 0, drop_y + 1)) {
+                    drop_y++;
+                }
+                
+                // Calculate final position
+                int final_y = piece.y + drop_y;
+                
+                // Simulate placing the piece
+                std::vector<std::vector<int>> sim_board = game.simulatePlacePiece(piece, final_y);
+                int lines_cleared = game.simulateClearLines(sim_board);
+                
+                // Evaluate the move
+                double score = evaluateBoard(sim_board, lines_cleared, final_y);
+                
+                if (score > best_move.score) {
+                    best_move.rotation = rot;
+                    best_move.x = x;
+                    best_move.score = score;
+                }
+            }
+        }
+        
+        return best_move;
+    }
+    
+    double evaluateBoard(const std::vector<std::vector<int>>& board, int lines_cleared, int landing_height) const {
+        double score = 0;
+        
+        // Lines cleared is very important
+        score += WEIGHT_COMPLETE_LINES * lines_cleared * 100;
+        
+        // Aggregate height (lower is better)
+        int aggregate_height = 0;
+        for (int x = 0; x < 10; x++) {
+            aggregate_height += getColumnHeight(x, board);
+        }
+        score += WEIGHT_AGGREGATE_HEIGHT * aggregate_height;
+        
+        // Holes (bad)
+        int holes = countHoles(board);
+        score += WEIGHT_HOLES * holes * 100;
+        
+        // Bumpiness (smooth surface is better)
+        int bumpiness = calculateBumpiness(board);
+        score += WEIGHT_BUMPINESS * bumpiness;
+        
+        // Landing height (lower is better)
+        score += WEIGHT_LANDING_HEIGHT * landing_height;
+        
+        return score;
+    }
+    
+private:
+    int getColumnHeight(int x, const std::vector<std::vector<int>>& board) const {
+        for (int y = 0; y < 20; y++) {
+            if (board[y][x] != 0) {
+                return 20 - y;
+            }
+        }
+        return 0;
+    }
+    
+    int countHoles(const std::vector<std::vector<int>>& board) const {
+        int holes = 0;
+        for (int x = 0; x < 10; x++) {
+            bool block_found = false;
+            for (int y = 0; y < 20; y++) {
+                if (board[y][x] != 0) {
+                    block_found = true;
+                } else if (block_found) {
+                    holes++;
+                }
+            }
+        }
+        return holes;
+    }
+    
+    int calculateBumpiness(const std::vector<std::vector<int>>& board) const {
+        int bumpiness = 0;
+        for (int x = 0; x < 9; x++) {
+            int h1 = getColumnHeight(x, board);
+            int h2 = getColumnHeight(x + 1, board);
+            bumpiness += abs(h1 - h2);
+        }
+        return bumpiness;
+    }
 };
 
 void drawBoard(WINDOW* win, TetrisGame& game) {
@@ -387,6 +615,12 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
     mvaddstr(info_y + 1, info_x, score_str);
     snprintf(score_str, sizeof(score_str), "Level: %d", game.level);
     mvaddstr(info_y + 2, info_x, score_str);
+    if (game.ai_enabled) {
+        mvaddstr(info_y + 3, info_x, "AI: ON");
+        mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
+    } else {
+        mvaddstr(info_y + 3, info_x, "AI: OFF");
+    }
     
     // Draw controls
     int controls_y = board_y + game.HEIGHT + 2;
@@ -395,7 +629,8 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
     mvaddstr(controls_y + 2, board_x, "Up: Rotate");
     mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
     mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
-    mvaddstr(controls_y + 5, board_x, "P: Pause  Q: Quit");
+    mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
+    mvaddstr(controls_y + 6, board_x, "P: Pause  Q: Quit");
     
     // Draw game over or pause message
     if (game.game_over) {
@@ -434,6 +669,7 @@ int main() {
     initColors();
     
     TetrisGame game;
+    TetrisAI ai;
     
     // Game loop
     while (true) {
@@ -447,7 +683,9 @@ int main() {
             break;
         } else if (key == 'p' || key == 'P') {
             game.paused = !game.paused;
-        } else if (!game.game_over && !game.paused) {
+        } else if (key == 'a' || key == 'A') {
+            game.ai_enabled = !game.ai_enabled;
+        } else if (!game.game_over && !game.paused && !game.ai_enabled) {
             if (key == KEY_LEFT) {
                 game.movePiece(-1, 0);
             } else if (key == KEY_RIGHT) {
@@ -463,6 +701,20 @@ int main() {
             }
         }
         
+        // AI logic
+        if (game.ai_enabled && !game.game_over && !game.paused && game.current_piece != nullptr) {
+            auto current_time = std::chrono::steady_clock::now();
+            auto ai_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                current_time - game.last_ai_time).count();
+            
+            // Execute AI move every 100ms (adjustable for AI speed)
+            if (ai_elapsed >= 100) {
+                TetrisAI::Move best_move = ai.findBestMove(game);
+                game.executeAIMove(best_move.rotation, best_move.x);
+                game.last_ai_time = current_time;
+            }
+        }
+        
         // Update game
         game.update();
         
@@ -473,7 +725,7 @@ int main() {
         refresh();
         
         // Small delay to prevent excessive CPU usage
-        napms(10);
+        napms(200);
     }
     
     endwin();
