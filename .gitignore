@@ -1,0 +1,21 @@
+# Compiled binaries
+tetris
+*.o
+*.exe
+
+# Build artifacts
+*.a
+*.so
+*.dylib
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+

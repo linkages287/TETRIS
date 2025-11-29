@@ -1,0 +1,9 @@
+# Requirements for Terminal Tetris
+# Note: curses is typically included with Python on Unix-like systems
+# If you're on Windows, you may need to install windows-curses:
+# pip install windows-curses
+
+# No additional requirements for Linux/macOS
+# For Windows users, uncomment the line below:
+# windows-curses
+
