@@ -897,6 +897,16 @@ int main(int argc, char* argv[]) {
             }
         }
         
+        // Check for convergence periodically (every 50 games)
+        if (game.training_mode && agent.total_games > 0 && agent.total_games % 50 == 0) {
+            if (agent.checkConvergence()) {
+                std::cout << "\nNetwork has converged! Saving model and exiting..." << std::endl;
+                agent.saveModel();
+                std::cout << "Model saved. Exiting..." << std::endl;
+                break;  // Exit main loop
+            }
+        }
+        
         // Auto-restart in training mode when game over
         if (game.training_mode && game.game_over) {
             debugLog("Game over - restarting");
@@ -922,6 +932,20 @@ int main(int argc, char* argv[]) {
             
             // Update running average (simple moving average of last N games)
             agent.recent_scores_sum += game.score;
+            
+            // Track recent scores for convergence detection
+            agent.recent_scores.push_back(game.score);
+            if (agent.recent_scores.size() > RLAgent::CONVERGENCE_WINDOW) {
+                agent.recent_scores.pop_front();
+            }
+            
+            // Track best score improvement
+            if (game.score > agent.best_score) {
+                agent.games_since_best_improvement = 0;
+            } else {
+                agent.games_since_best_improvement++;
+            }
+            
             if (agent.total_games <= RLAgent::RECENT_SCORES_COUNT) {
                 agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
             } else {

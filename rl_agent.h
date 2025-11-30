@@ -33,6 +33,7 @@ public:
     
     NeuralNetwork();
     double relu(double x) const;
+    double leaky_relu(double x) const;  // Leaky ReLU to prevent dead neurons
     double forward(const std::vector<double>& input);
     void update(const std::vector<double>& input, double target, double learning_rate);
     void save(const std::string& filename);
@@ -65,6 +66,14 @@ public:
         bool model_loaded;         // Whether model was loaded from file
         static const int RECENT_SCORES_COUNT = 100;  // Number of recent games to average
         
+        // Convergence detection
+        std::deque<int> recent_scores;  // Store recent scores for convergence detection
+        int games_since_best_improvement;  // Games since best score improved
+        double convergence_check_interval;  // Last convergence check game count
+        static const int CONVERGENCE_WINDOW = 500;  // Games to check for stability
+        static const int CONVERGENCE_STABILITY_THRESHOLD = 500;  // Games with stable score
+        static constexpr double CONVERGENCE_VARIATION_THRESHOLD = 0.05;  // 5% variation allowed
+        
         // Epsilon-Score relationship tracking
         double last_epsilon;       // Previous epsilon value
         double epsilon_change_reason;  // Reason for epsilon change (improvement %)
@@ -89,6 +98,7 @@ public:
     void addExperience(const Experience& exp);
     void train();
     void updateEpsilonBasedOnPerformance();  // Adaptive epsilon based on score improvement
+    bool checkConvergence();  // Check if network has converged
     void saveModel();
     void saveModelToFile(const std::string& filename);  // Save model to specific file
 };

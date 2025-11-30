@@ -3,6 +3,7 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++11 -O2
 LDFLAGS = -lncurses
+SDLFLAGS = $(shell sdl2-config --cflags --libs) -lGL -lGLU
 TARGET = tetris
 VISUALIZER = weight_visualizer
 SOURCES = tetris.cpp rl_agent.cpp parameter_tuner.cpp
@@ -18,7 +19,7 @@ $(TARGET): $(OBJECTS)
 
 # Build the weight visualizer
 $(VISUALIZER): $(VISUALIZER_OBJ)
-	$(CXX) $(CXXFLAGS) -o $(VISUALIZER) $(VISUALIZER_OBJ) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(VISUALIZER) $(VISUALIZER_OBJ) $(SDLFLAGS)
 
 # Build object files
 %.o: %.cpp

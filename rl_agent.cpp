@@ -8,22 +8,24 @@
 #include <sstream>
 #include <ctime>
 #include <iomanip>
+#include <iostream>
+#include <deque>
 
 // Neural Network Implementation
 NeuralNetwork::NeuralNetwork() {
     std::random_device rd;
     std::mt19937 gen(rd());
     
-    // Xavier/Glorot initialization for better weight distribution
-    // Limit = sqrt(6.0 / (fan_in + fan_out))
-    double limit1 = std::sqrt(6.0 / (INPUT_SIZE + HIDDEN_SIZE));
-    double limit2 = std::sqrt(6.0 / (HIDDEN_SIZE + OUTPUT_SIZE));
+    // Improved initialization to prevent dead neurons with Leaky ReLU
+    // He initialization for Leaky ReLU: stddev = sqrt(2.0 / fan_in)
+    double stddev1 = std::sqrt(2.0 / INPUT_SIZE) * 1.2;  // 20% larger for better activation
+    double stddev2 = std::sqrt(2.0 / HIDDEN_SIZE);
     
-    std::uniform_real_distribution<double> dist1(-limit1, limit1);
-    std::uniform_real_distribution<double> dist2(-limit2, limit2);
-    std::normal_distribution<double> bias_dist(0.0, 0.01);  // Small bias initialization
+    std::normal_distribution<double> dist1(0.0, stddev1);
+    std::normal_distribution<double> dist2(0.0, stddev2);
+    std::normal_distribution<double> bias_dist(0.2, 0.15);  // Positive bias to help activation
     
-    // Initialize weights1 (Input -> Hidden) with Xavier initialization
+    // Initialize weights1 (Input -> Hidden) with He initialization
     weights1.resize(INPUT_SIZE, std::vector<double>(HIDDEN_SIZE));
     for (auto& row : weights1) {
         for (auto& w : row) {
@@ -31,13 +33,13 @@ NeuralNetwork::NeuralNetwork() {
         }
     }
     
-    // Initialize bias1 with small random values
+    // Initialize bias1 with small positive random values to prevent dead neurons
     bias1.resize(HIDDEN_SIZE, 0.0);
     for (auto& b : bias1) {
         b = bias_dist(gen);
     }
     
-    // Initialize weights2 (Hidden -> Output) with Xavier initialization
+    // Initialize weights2 (Hidden -> Output) with He initialization
     weights2.resize(HIDDEN_SIZE, std::vector<double>(OUTPUT_SIZE));
     for (auto& row : weights2) {
         for (auto& w : row) {
@@ -47,24 +49,29 @@ NeuralNetwork::NeuralNetwork() {
     
     // Initialize bias2 with small random values
     bias2.resize(OUTPUT_SIZE, 0.0);
-    for (auto& b : bias2) {
-        b = bias_dist(gen);
-    }
+    std::normal_distribution<double> bias2_dist(0.0, 0.1);
+    bias2[0] = bias2_dist(gen);
 }
 
 double NeuralNetwork::relu(double x) const {
     return std::max(0.0, x);
 }
 
+double NeuralNetwork::leaky_relu(double x) const {
+    // Leaky ReLU: allows small negative gradients to flow through
+    // Prevents "dead neurons" that output 0 for all inputs
+    return std::max(0.01 * x, x);  // Leak factor: 0.01 (1% of negative values)
+}
+
 double NeuralNetwork::forward(const std::vector<double>& input) {
-    // Hidden layer
+    // Hidden layer - use Leaky ReLU to prevent dead neurons
     std::vector<double> hidden(HIDDEN_SIZE);
     for (int i = 0; i < HIDDEN_SIZE; i++) {
         double sum = bias1[i];
         for (int j = 0; j < INPUT_SIZE; j++) {
             sum += input[j] * weights1[j][i];
         }
-        hidden[i] = relu(sum);
+        hidden[i] = leaky_relu(sum);  // Use Leaky ReLU instead of ReLU
     }
     
     // Output layer
@@ -86,7 +93,7 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
             sum += input[j] * weights1[j][i];
         }
         hidden_pre_activation[i] = sum;
-        hidden[i] = relu(sum);
+        hidden[i] = leaky_relu(sum);  // Use Leaky ReLU instead of ReLU
     }
     
     double output = bias2[0];
@@ -103,8 +110,8 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
     // Output layer gradient (dE/doutput = -error, but we use error for gradient descent)
     double output_gradient = error;  // Don't multiply by learning_rate here
     
-    // Weight decay coefficient (L2 regularization)
-    const double weight_decay = 0.0001;
+    // Weight decay coefficient (L2 regularization) - reduced to allow more learning
+    const double weight_decay = 0.00005;  // Reduced from 0.0001 to prevent over-regularization
     
     // Maximum gradient magnitude for clipping
     const double max_gradient = 1.0;
@@ -144,11 +151,12 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
             hidden_gradient = (hidden_gradient > 0) ? 1.0 : -1.0;
         }
         
-        // ReLU derivative: 1 if hidden_pre_activation > 0, else 0
-        if (hidden_pre_activation[i] > 0) {
-            // Update input-to-hidden weights
-            for (int j = 0; j < INPUT_SIZE; j++) {
-                double weight_gradient = hidden_gradient * input[j];
+        // Leaky ReLU derivative: 1 if hidden_pre_activation > 0, else 0.01
+        double relu_derivative = (hidden_pre_activation[i] > 0) ? 1.0 : 0.01;
+        // Always update (Leaky ReLU allows negative gradients to flow)
+        // Update input-to-hidden weights
+        for (int j = 0; j < INPUT_SIZE; j++) {
+            double weight_gradient = hidden_gradient * relu_derivative * input[j];
                 
                 // Gradient clipping: prevent extreme gradients
                 if (std::abs(weight_gradient) > max_gradient) {
@@ -158,15 +166,14 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
                 // Apply weight decay (L2 regularization)
                 weights1[j][i] -= weight_decay * weights1[j][i];
                 
-                weights1[j][i] += learning_rate * weight_gradient;
-                // Clip weights to prevent explosion (reduced from ±10.0 to ±2.0)
-                weights1[j][i] = std::max(-2.0, std::min(2.0, weights1[j][i]));
-            }
-            // Update hidden bias
-            bias1[i] -= weight_decay * bias1[i];
-            bias1[i] += learning_rate * hidden_gradient;
-            bias1[i] = std::max(-2.0, std::min(2.0, bias1[i]));
+            weights1[j][i] += learning_rate * weight_gradient;
+            // Clip weights to prevent explosion (reduced from ±10.0 to ±2.0)
+            weights1[j][i] = std::max(-2.0, std::min(2.0, weights1[j][i]));
         }
+        // Update hidden bias
+        bias1[i] -= weight_decay * bias1[i];
+        bias1[i] += learning_rate * hidden_gradient * relu_derivative;
+        bias1[i] = std::max(-2.0, std::min(2.0, bias1[i]));
     }
     
     // Check for NaN or Inf values (prevent crashes)
@@ -422,7 +429,7 @@ RLAgent::RLAgent(const std::string& model_file)
     : epsilon(1.0),
     epsilon_min(0.05),        // Minimum exploration rate
     epsilon_decay(0.995),     // Faster decay: 0.995 (reaches min in ~900 games)
-    learning_rate(0.001),     // Reduced learning rate for stable learning (prevents weight saturation)
+    learning_rate(0.002),     // Increased learning rate for better learning (was 0.001, now 0.002)
     gamma(0.99),              // High gamma for better long-term planning
     training_episodes(0),
     total_games(0),
@@ -432,6 +439,8 @@ RLAgent::RLAgent(const std::string& model_file)
     recent_scores_sum(0),
     last_batch_error(0.0),
     model_loaded(false),
+    games_since_best_improvement(0),
+    convergence_check_interval(0.0),
     last_epsilon(1.0),
     epsilon_change_reason(0.0),
     epsilon_increase_count(0),
@@ -775,14 +784,16 @@ void RLAgent::train() {
         if (std::isfinite(target) && std::isfinite(predicted)) {
             // Only skip if error is extremely large (likely bad data)
             if (error < 10000.0) {  // Increased from 1000.0
-                // Adaptive learning rate: reduce when error is small (fine-tuning)
+                // Adaptive learning rate: maintain or slightly increase when learning
                 double adaptive_lr = learning_rate;
-                if (error < 1.0 && average_score > 300.0) {
-                    // High performance and small error - use reduced learning rate to prevent overshooting
-                    adaptive_lr = learning_rate * 0.5;  // Half learning rate for fine-tuning
-                } else if (error < 0.5 && average_score > 500.0) {
-                    // Very high performance - use even smaller learning rate
-                    adaptive_lr = learning_rate * 0.25;  // Quarter learning rate for very stable performance
+                // Only reduce learning rate if error is extremely small AND performance is very high
+                // This prevents premature fine-tuning that stops learning
+                if (error < 0.1 && average_score > 1000.0) {
+                    // Very high performance and very small error - slight reduction for fine-tuning
+                    adaptive_lr = learning_rate * 0.8;  // 20% reduction only for very stable performance
+                } else if (error > 5.0 && average_score < 200.0) {
+                    // Large error and low performance - slightly increase learning rate
+                    adaptive_lr = learning_rate * 1.2;  // 20% increase to learn faster
                 }
                 q_network.update(exp.state, target, adaptive_lr);
                 valid_updates++;
@@ -934,10 +945,102 @@ void RLAgent::updateEpsilonBasedOnPerformance() {
     
     last_epsilon = epsilon_before;
     
+    // Safety check: Ensure epsilon never goes below epsilon_min
+    if (epsilon < epsilon_min) {
+        epsilon = epsilon_min;
+    }
+    
     // Update previous average for next comparison (update every 5 games or on significant change)
     if (std::abs(improvement_percent) > 1.0 || total_games % 5 == 0) {
         previous_avg_score = average_score;
     }
+}
+
+bool RLAgent::checkConvergence() {
+    // Need at least CONVERGENCE_WINDOW games to check convergence
+    if (total_games < CONVERGENCE_WINDOW) {
+        return false;
+    }
+    
+    // Check 1: Average score stability
+    // Calculate coefficient of variation over recent games
+    if (recent_scores.size() < CONVERGENCE_STABILITY_THRESHOLD) {
+        return false;
+    }
+    
+    // Calculate mean and standard deviation of recent scores
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    int count = 0;
+    
+    for (int score : recent_scores) {
+        sum += score;
+        sum_sq += score * score;
+        count++;
+    }
+    
+    if (count < CONVERGENCE_STABILITY_THRESHOLD) {
+        return false;
+    }
+    
+    double mean = sum / count;
+    double variance = (sum_sq / count) - (mean * mean);
+    double std_dev = std::sqrt(variance);
+    double coefficient_of_variation = (mean > 0.1) ? (std_dev / mean) : 1.0;
+    
+    // Check 2: Epsilon at minimum
+    bool epsilon_at_min = (epsilon <= epsilon_min + 0.01);
+    
+    // Check 3: Error stability
+    bool error_stable = (last_batch_error < 2.0);
+    
+    // Check 4: Best score plateau
+    bool best_score_plateau = (games_since_best_improvement >= 1000);
+    
+    // Check 5: No significant upward trend
+    // Calculate trend over recent scores
+    double trend = 0.0;
+    if (recent_scores.size() >= 100) {
+        // Simple linear regression slope
+        double x_sum = 0.0, y_sum = 0.0, xy_sum = 0.0, x2_sum = 0.0;
+        int n = std::min(100, (int)recent_scores.size());
+        for (int i = 0; i < n; i++) {
+            double x = i;
+            double y = recent_scores[recent_scores.size() - n + i];
+            x_sum += x;
+            y_sum += y;
+            xy_sum += x * y;
+            x2_sum += x * x;
+        }
+        double denominator = (n * x2_sum - x_sum * x_sum);
+        if (std::abs(denominator) > 0.0001) {
+            trend = (n * xy_sum - x_sum * y_sum) / denominator;
+        }
+    }
+    
+    // Normalize trend by mean score
+    double normalized_trend = (mean > 0.1) ? (trend / mean) : 0.0;
+    
+    // Convergence criteria (all must be true):
+    bool score_stable = (coefficient_of_variation < CONVERGENCE_VARIATION_THRESHOLD);
+    bool no_upward_trend = (normalized_trend < 0.01);  // Less than 1% improvement per game
+    
+    bool converged = score_stable && epsilon_at_min && error_stable && 
+                     (best_score_plateau || no_upward_trend);
+    
+    if (converged) {
+        std::cout << "\n=== CONVERGENCE DETECTED ===" << std::endl;
+        std::cout << "Games: " << total_games << std::endl;
+        std::cout << "Episodes: " << training_episodes << std::endl;
+        std::cout << "Average Score: " << average_score << " (CV: " << coefficient_of_variation << ")" << std::endl;
+        std::cout << "Best Score: " << best_score << " (unchanged for " << games_since_best_improvement << " games)" << std::endl;
+        std::cout << "Epsilon: " << epsilon << " (at minimum: " << epsilon_min << ")" << std::endl;
+        std::cout << "Error: " << last_batch_error << std::endl;
+        std::cout << "Trend: " << normalized_trend * 100 << "% per game" << std::endl;
+        std::cout << "===========================" << std::endl;
+    }
+    
+    return converged;
 }
 
 void RLAgent::saveModel() {
