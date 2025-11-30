@@ -17,6 +17,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <iostream>
 #include "rl_agent.h"
 #include "parameter_tuner.h"
 #include "game_classes.h"
@@ -624,7 +625,7 @@ void initColors() {
 }
 
 int main(int argc, char* argv[]) {
-    // Parse command line arguments
+    // Parse command line arguments (before ncurses initialization)
     std::string model_file = "tetris_model.txt";
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -632,17 +633,31 @@ int main(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 model_file = argv[++i];
             } else {
-                printw("Error: --model requires a filename\n");
-                refresh();
-                napms(2000);
+                std::cerr << "Error: --model requires a filename\n";
+                std::cerr << "Usage: " << argv[0] << " [--model|-m <filename>] [--help|-h]\n";
                 return 1;
             }
         } else if (arg == "--help" || arg == "-h") {
-            printw("Usage: %s [--model|-m <filename>]\n", argv[0]);
-            printw("  --model, -m: Load model from specified file (default: tetris_model.txt)\n");
-            printw("  --help, -h:  Show this help message\n");
-            refresh();
-            napms(3000);
+            std::cout << "Tetris Game with Reinforcement Learning AI\n";
+            std::cout << "==========================================\n\n";
+            std::cout << "Usage: " << argv[0] << " [OPTIONS]\n\n";
+            std::cout << "Options:\n";
+            std::cout << "  --model, -m <filename>  Load neural network model from specified file\n";
+            std::cout << "                          (default: tetris_model.txt)\n";
+            std::cout << "  --help, -h              Show this help message\n\n";
+            std::cout << "Examples:\n";
+            std::cout << "  " << argv[0] << "                    # Use default model (tetris_model.txt)\n";
+            std::cout << "  " << argv[0] << " -m tetris_model_best.txt  # Load best model\n";
+            std::cout << "  " << argv[0] << " --help              # Show this help\n\n";
+            std::cout << "Controls:\n";
+            std::cout << "  Left/Right Arrow  - Move piece left/right\n";
+            std::cout << "  Up Arrow          - Rotate piece\n";
+            std::cout << "  Down Arrow        - Soft drop\n";
+            std::cout << "  Space             - Hard drop\n";
+            std::cout << "  A                 - Toggle AI\n";
+            std::cout << "  T                 - Toggle training mode\n";
+            std::cout << "  P                 - Pause/Unpause\n";
+            std::cout << "  Q                 - Quit\n";
             return 0;
         }
     }

@@ -11,31 +11,42 @@
 NeuralNetwork::NeuralNetwork() {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::normal_distribution<double> dist(0.0, 0.1);
     
-    // Initialize weights with small random values
+    // Xavier/Glorot initialization for better weight distribution
+    // Limit = sqrt(6.0 / (fan_in + fan_out))
+    double limit1 = std::sqrt(6.0 / (INPUT_SIZE + HIDDEN_SIZE));
+    double limit2 = std::sqrt(6.0 / (HIDDEN_SIZE + OUTPUT_SIZE));
+    
+    std::uniform_real_distribution<double> dist1(-limit1, limit1);
+    std::uniform_real_distribution<double> dist2(-limit2, limit2);
+    std::normal_distribution<double> bias_dist(0.0, 0.01);  // Small bias initialization
+    
+    // Initialize weights1 (Input -> Hidden) with Xavier initialization
     weights1.resize(INPUT_SIZE, std::vector<double>(HIDDEN_SIZE));
     for (auto& row : weights1) {
         for (auto& w : row) {
-            w = dist(gen);
+            w = dist1(gen);
         }
     }
     
+    // Initialize bias1 with small random values
     bias1.resize(HIDDEN_SIZE, 0.0);
     for (auto& b : bias1) {
-        b = dist(gen);
+        b = bias_dist(gen);
     }
     
+    // Initialize weights2 (Hidden -> Output) with Xavier initialization
     weights2.resize(HIDDEN_SIZE, std::vector<double>(OUTPUT_SIZE));
     for (auto& row : weights2) {
         for (auto& w : row) {
-            w = dist(gen);
+            w = dist2(gen);
         }
     }
     
+    // Initialize bias2 with small random values
     bias2.resize(OUTPUT_SIZE, 0.0);
     for (auto& b : bias2) {
-        b = dist(gen);
+        b = bias_dist(gen);
     }
 }
 
@@ -84,39 +95,75 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
     // Backward pass - proper backpropagation
     double error = target - output;
     
-    // Clip error to prevent extreme gradients (less aggressive clipping)
-    error = std::max(-50.0, std::min(50.0, error));
+    // Clip error to prevent extreme gradients (reduced from ±50.0 to ±10.0)
+    error = std::max(-10.0, std::min(10.0, error));
     
     // Output layer gradient (dE/doutput = -error, but we use error for gradient descent)
     double output_gradient = error;  // Don't multiply by learning_rate here
     
+    // Weight decay coefficient (L2 regularization)
+    const double weight_decay = 0.0001;
+    
+    // Maximum gradient magnitude for clipping
+    const double max_gradient = 1.0;
+    
     // Update output layer weights and bias
     for (int i = 0; i < HIDDEN_SIZE; i++) {
         double weight_gradient = output_gradient * hidden[i];
+        
+        // Gradient clipping: prevent extreme gradients
+        if (std::abs(weight_gradient) > max_gradient) {
+            weight_gradient = (weight_gradient > 0) ? max_gradient : -max_gradient;
+        }
+        
+        // Apply weight decay (L2 regularization)
+        weights2[i][0] -= weight_decay * weights2[i][0];
+        
         weights2[i][0] += learning_rate * weight_gradient;
-        // Clip weights to prevent explosion
-        weights2[i][0] = std::max(-50.0, std::min(50.0, weights2[i][0]));
+        // Clip weights to prevent explosion (reduced from ±50.0 to ±20.0)
+        weights2[i][0] = std::max(-20.0, std::min(20.0, weights2[i][0]));
     }
-    bias2[0] += learning_rate * output_gradient;
-    bias2[0] = std::max(-50.0, std::min(50.0, bias2[0]));
+    
+    // Clip output gradient for bias update
+    double output_gradient_clipped = output_gradient;
+    if (std::abs(output_gradient_clipped) > 1.0) {
+        output_gradient_clipped = (output_gradient_clipped > 0) ? 1.0 : -1.0;
+    }
+    bias2[0] += learning_rate * output_gradient_clipped;
+    bias2[0] = std::max(-20.0, std::min(20.0, bias2[0]));
     
     // Hidden layer gradients
     for (int i = 0; i < HIDDEN_SIZE; i++) {
         // Gradient from output layer: dE/dhidden = output_gradient * weight2
         double hidden_gradient = output_gradient * weights2[i][0];
         
+        // Gradient clipping for hidden layer
+        if (std::abs(hidden_gradient) > 1.0) {
+            hidden_gradient = (hidden_gradient > 0) ? 1.0 : -1.0;
+        }
+        
         // ReLU derivative: 1 if hidden_pre_activation > 0, else 0
         if (hidden_pre_activation[i] > 0) {
             // Update input-to-hidden weights
             for (int j = 0; j < INPUT_SIZE; j++) {
                 double weight_gradient = hidden_gradient * input[j];
+                
+                // Gradient clipping: prevent extreme gradients
+                if (std::abs(weight_gradient) > max_gradient) {
+                    weight_gradient = (weight_gradient > 0) ? max_gradient : -max_gradient;
+                }
+                
+                // Apply weight decay (L2 regularization)
+                weights1[j][i] -= weight_decay * weights1[j][i];
+                
                 weights1[j][i] += learning_rate * weight_gradient;
-                // Clip weights to prevent explosion
-                weights1[j][i] = std::max(-10.0, std::min(10.0, weights1[j][i]));
+                // Clip weights to prevent explosion (reduced from ±10.0 to ±2.0)
+                weights1[j][i] = std::max(-2.0, std::min(2.0, weights1[j][i]));
             }
             // Update hidden bias
+            bias1[i] -= weight_decay * bias1[i];
             bias1[i] += learning_rate * hidden_gradient;
-            bias1[i] = std::max(-10.0, std::min(10.0, bias1[i]));
+            bias1[i] = std::max(-2.0, std::min(2.0, bias1[i]));
         }
     }
     
@@ -341,7 +388,7 @@ RLAgent::RLAgent(const std::string& model_file)
     : epsilon(1.0),
     epsilon_min(0.05),        // Minimum exploration rate
     epsilon_decay(0.995),     // Faster decay: 0.995 (reaches min in ~900 games)
-    learning_rate(0.002),     // Increased learning rate for faster learning (2x)
+    learning_rate(0.001),     // Reduced learning rate for stable learning (prevents weight saturation)
     gamma(0.99),              // High gamma for better long-term planning
     training_episodes(0),
     total_games(0),

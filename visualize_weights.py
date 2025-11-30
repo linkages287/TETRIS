@@ -5,6 +5,18 @@ Reads tetris_model.txt and displays weight matrices graphically
 """
 
 import numpy as np
+import matplotlib
+# Set backend before importing pyplot to avoid non-responsive issues
+# Try TkAgg first (most stable), then fallback to Agg (non-interactive)
+try:
+    matplotlib.use('TkAgg')
+except:
+    try:
+        matplotlib.use('Agg')
+        print("Warning: Using non-interactive backend (Agg). Dynamic updates may not work.")
+    except:
+        pass  # Use default backend
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import LinearSegmentedColormap
@@ -40,6 +52,15 @@ class WeightVisualizer:
             'average_score': None,
             'previous_avg_score': None
         }
+        
+        # For dynamic updates - store figure and axes references
+        self.fig = None
+        self.axes = None
+        self.images = None  # Store image objects for heatmaps
+        self.histograms = None  # Store histogram data for updates
+        self.text_objects = []  # Store text objects to clear them properly
+        self.hover_annotations = {}  # Store hover annotation objects
+        self.colorbars = {}  # Store colorbar objects
         
     def load_model(self):
         """Load weights from tetris_model.txt"""
@@ -158,16 +179,119 @@ class WeightVisualizer:
         }
         return stats
     
-    def visualize_all(self, save_file=None):
-        """Create comprehensive visualization of all weights"""
+    def visualize_all(self, save_file=None, update_existing=False):
+        """Create comprehensive visualization of all weights
+        
+        Args:
+            save_file: If provided, save to file instead of displaying
+            update_existing: If True, update existing figure instead of creating new one
+        """
         if self.weights1 is None:
             print("Error: No weights loaded. Call load_model() first.")
             return
         
         stats = self.get_statistics()
         
-        # Create figure with subplots - adjust size and spacing
-        fig = plt.figure(figsize=(16, 13))
+        # If updating existing figure, reuse it
+        if update_existing and self.fig is not None and plt.fignum_exists(self.fig.number):
+            fig = self.fig
+            # Clear all old text objects
+            for text_obj in self.text_objects:
+                try:
+                    text_obj.remove()
+                except:
+                    pass
+            self.text_objects = []
+            
+            # Clear existing plots but keep figure structure
+            for ax in self.axes.values():
+                ax.clear()
+            
+            # Remove old colorbars
+            for cb in self.colorbars.values():
+                try:
+                    cb.remove()
+                except:
+                    pass
+            self.colorbars = {}
+        else:
+            # Create new figure
+            fig = plt.figure(figsize=(16, 13))
+            self.fig = fig
+            self.axes = {}
+            self.images = {}
+            self.histograms = {}
+            self.text_objects = []
+            self.hover_annotations = {}
+            self.colorbars = {}
+            
+            # Set up hover tooltip handler
+            def on_hover(event):
+                if event.inaxes is None:
+                    return
+                
+                # Find which axis we're hovering over
+                ax = event.inaxes
+                if ax not in [self.axes.get('ax1'), self.axes.get('ax2')]:
+                    return
+                
+                # Get image data
+                if ax == self.axes.get('ax1') and 'im1' in self.images:
+                    im = self.images['im1']
+                    data = self.weights1
+                    label = "Weights1"
+                elif ax == self.axes.get('ax2') and 'im2' in self.images:
+                    im = self.images['im2']
+                    data = self.weights2
+                    label = "Weights2"
+                else:
+                    return
+                
+                # Convert mouse position to data coordinates
+                if hasattr(im, 'get_extent'):
+                    extent = im.get_extent()
+                    xlim = ax.get_xlim()
+                    ylim = ax.get_ylim()
+                    
+                    # Get data indices
+                    x = int(event.xdata) if event.xdata is not None else -1
+                    y = int(event.ydata) if event.ydata is not None else -1
+                    
+                    if 0 <= y < data.shape[0] and 0 <= x < data.shape[1]:
+                        value = data[y, x]
+                        
+                        # Create or update annotation
+                        if ax not in self.hover_annotations:
+                            self.hover_annotations[ax] = ax.annotate(
+                                '', xy=(0, 0), xytext=(10, 10),
+                                textcoords='offset points',
+                                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                                arrowprops=dict(arrowstyle='->')
+                            )
+                            self.hover_annotations[ax].set_visible(False)
+                        
+                        ann = self.hover_annotations[ax]
+                        ann.xy = (event.xdata, event.ydata)
+                        ann.set_text(f'{label}\nRow: {y}, Col: {x}\nValue: {value:.6f}')
+                        ann.set_visible(True)
+                        fig.canvas.draw_idle()
+                else:
+                    # Hide annotation if outside data bounds
+                    if ax in self.hover_annotations:
+                        self.hover_annotations[ax].set_visible(False)
+                        fig.canvas.draw_idle()
+            
+            def on_leave(event):
+                # Hide all annotations when mouse leaves axes
+                for ann in self.hover_annotations.values():
+                    ann.set_visible(False)
+                if self.fig is not None:
+                    self.fig.canvas.draw_idle()
+            
+            # Connect event handlers
+            fig.canvas.mpl_connect('motion_notify_event', on_hover)
+            fig.canvas.mpl_connect('axes_leave_event', on_leave)
+        
         gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.3, top=0.90, bottom=0.10)
         
         # Custom colormap: blue (negative) -> white (zero) -> red (positive)
@@ -176,63 +300,125 @@ class WeightVisualizer:
         cmap = LinearSegmentedColormap.from_list('custom', colors, N=n_bins)
         
         # 1. Weights1 Heatmap (Input -> Hidden)
-        ax1 = fig.add_subplot(gs[0, :])
-        im1 = ax1.imshow(self.weights1, aspect='auto', cmap=cmap, 
-                        vmin=-max(abs(self.weights1.min()), abs(self.weights1.max())),
-                        vmax=max(abs(self.weights1.min()), abs(self.weights1.max())))
-        ax1.set_title(f'Weights1: Input → Hidden Layer ({INPUT_SIZE}×{HIDDEN_SIZE})\n'
+        if 'ax1' not in self.axes:
+            self.axes['ax1'] = fig.add_subplot(gs[0, :])
+        ax1 = self.axes['ax1']
+        
+        vmin1 = -max(abs(self.weights1.min()), abs(self.weights1.max()))
+        vmax1 = max(abs(self.weights1.min()), abs(self.weights1.max()))
+        
+        # Always recalculate color range dynamically based on current data
+        vmin1 = -max(abs(self.weights1.min()), abs(self.weights1.max()))
+        vmax1 = max(abs(self.weights1.min()), abs(self.weights1.max()))
+        
+        if 'im1' not in self.images or not update_existing:
+            im1 = ax1.imshow(self.weights1, aspect='auto', cmap=cmap, vmin=vmin1, vmax=vmax1)
+            self.images['im1'] = im1
+            cb1 = plt.colorbar(im1, ax=ax1, label='Weight Value')
+            self.colorbars['cb1'] = cb1
+        else:
+            # Update existing image data with new color range
+            self.images['im1'].set_data(self.weights1)
+            self.images['im1'].set_clim(vmin1, vmax1)  # Update color scale dynamically
+            # Update colorbar
+            if 'cb1' in self.colorbars:
+                self.colorbars['cb1'].update_normal(self.images['im1'])
+        
+        title1 = ax1.set_title(f'Weights1: Input → Hidden Layer ({INPUT_SIZE}×{HIDDEN_SIZE})\n'
                      f'Mean: {stats["weights1"]["mean"]:.4f}, Std: {stats["weights1"]["std"]:.4f}, '
                      f'Range: [{stats["weights1"]["min"]:.3f}, {stats["weights1"]["max"]:.3f}]',
                      fontsize=12, fontweight='bold')
+        self.text_objects.append(title1)
         ax1.set_xlabel('Hidden Neurons (64)', fontsize=10)
         ax1.set_ylabel('Input Features (29)', fontsize=10)
-        plt.colorbar(im1, ax=ax1, label='Weight Value')
         
         # 2. Weights2 Heatmap (Hidden -> Output)
-        ax2 = fig.add_subplot(gs[1, :])
-        im2 = ax2.imshow(self.weights2, aspect='auto', cmap=cmap,
-                        vmin=-max(abs(self.weights2.min()), abs(self.weights2.max())),
-                        vmax=max(abs(self.weights2.min()), abs(self.weights2.max())))
-        ax2.set_title(f'Weights2: Hidden → Output ({HIDDEN_SIZE}×{OUTPUT_SIZE})\n'
+        if 'ax2' not in self.axes:
+            self.axes['ax2'] = fig.add_subplot(gs[1, :])
+        ax2 = self.axes['ax2']
+        
+        # Always recalculate color range dynamically based on current data
+        vmin2 = -max(abs(self.weights2.min()), abs(self.weights2.max()))
+        vmax2 = max(abs(self.weights2.min()), abs(self.weights2.max()))
+        
+        if 'im2' not in self.images or not update_existing:
+            im2 = ax2.imshow(self.weights2, aspect='auto', cmap=cmap, vmin=vmin2, vmax=vmax2)
+            self.images['im2'] = im2
+            cb2 = plt.colorbar(im2, ax=ax2, label='Weight Value')
+            self.colorbars['cb2'] = cb2
+        else:
+            # Update existing image data with new color range
+            self.images['im2'].set_data(self.weights2)
+            self.images['im2'].set_clim(vmin2, vmax2)  # Update color scale dynamically
+            # Update colorbar
+            if 'cb2' in self.colorbars:
+                self.colorbars['cb2'].update_normal(self.images['im2'])
+        
+        title2 = ax2.set_title(f'Weights2: Hidden → Output ({HIDDEN_SIZE}×{OUTPUT_SIZE})\n'
                      f'Mean: {stats["weights2"]["mean"]:.4f} | Std: {stats["weights2"]["std"]:.4f} | '
                      f'Range: [{stats["weights2"]["min"]:.3f}, {stats["weights2"]["max"]:.3f}]',
                      fontsize=11, fontweight='bold', pad=10)
+        self.text_objects.append(title2)
         ax2.set_xlabel('Output Neurons (1)', fontsize=10)
         ax2.set_ylabel('Hidden Neurons (64)', fontsize=10)
-        plt.colorbar(im2, ax=ax2, label='Weight Value')
         
         # 3. Bias1 Distribution
-        ax3 = fig.add_subplot(gs[2, 0])
-        ax3.hist(self.bias1, bins=30, edgecolor='black', alpha=0.7, color='skyblue')
+        if 'ax3' not in self.axes:
+            self.axes['ax3'] = fig.add_subplot(gs[2, 0])
+        ax3 = self.axes['ax3']
+        
+        # Clear and redraw histogram
+        ax3.clear()
+        n, bins, patches = ax3.hist(self.bias1, bins=30, edgecolor='black', alpha=0.7, color='skyblue')
+        self.histograms['bias1'] = (n, bins, patches)
         ax3.axvline(stats['bias1']['mean'], color='red', linestyle='--', linewidth=2, label=f'Mean: {stats["bias1"]["mean"]:.4f}')
-        ax3.set_title(f'Bias1 Distribution\n'
+        title3 = ax3.set_title(f'Bias1 Distribution\n'
                      f'Mean: {stats["bias1"]["mean"]:.4f} | Std: {stats["bias1"]["std"]:.4f}',
                      fontsize=10, fontweight='bold', pad=8)
+        self.text_objects.append(title3)
         ax3.set_xlabel('Bias Value', fontsize=9)
         ax3.set_ylabel('Frequency', fontsize=9)
-        ax3.legend()
+        leg3 = ax3.legend()
+        if leg3:
+            self.text_objects.append(leg3)
         ax3.grid(True, alpha=0.3)
         
         # 4. Bias2 Value
-        ax4 = fig.add_subplot(gs[2, 1])
+        if 'ax4' not in self.axes:
+            self.axes['ax4'] = fig.add_subplot(gs[2, 1])
+        ax4 = self.axes['ax4']
+        
+        # Clear and redraw bar
+        ax4.clear()
         ax4.bar([0], [self.bias2[0]], color='coral', edgecolor='black', linewidth=2)
-        ax4.set_title(f'Bias2 Value\n{self.bias2[0]:.6f}', 
+        title4 = ax4.set_title(f'Bias2 Value\n{self.bias2[0]:.6f}', 
                      fontsize=10, fontweight='bold', pad=8)
+        self.text_objects.append(title4)
         ax4.set_ylabel('Bias Value', fontsize=9)
         ax4.set_xticks([])
         ax4.grid(True, alpha=0.3, axis='y')
         
         # 5. Weight Magnitude Distribution
-        ax5 = fig.add_subplot(gs[2, 2])
+        if 'ax5' not in self.axes:
+            self.axes['ax5'] = fig.add_subplot(gs[2, 2])
+        ax5 = self.axes['ax5']
+        
         all_weights = np.concatenate([self.weights1.flatten(), self.weights2.flatten()])
-        ax5.hist(np.abs(all_weights), bins=50, edgecolor='black', alpha=0.7, color='lightgreen')
+        
+        # Clear and redraw histogram
+        ax5.clear()
+        n, bins, patches = ax5.hist(np.abs(all_weights), bins=50, edgecolor='black', alpha=0.7, color='lightgreen')
+        self.histograms['all_weights'] = (n, bins, patches)
         ax5.axvline(np.mean(np.abs(all_weights)), color='red', linestyle='--', linewidth=2, 
                    label=f'Mean: {np.mean(np.abs(all_weights)):.4f}')
-        ax5.set_title('Weight Magnitude Distribution', fontsize=10, fontweight='bold', pad=8)
+        title5 = ax5.set_title('Weight Magnitude Distribution', fontsize=10, fontweight='bold', pad=8)
+        self.text_objects.append(title5)
         ax5.set_xlabel('|Weight| Value', fontsize=9)
         ax5.set_ylabel('Frequency', fontsize=9)
         ax5.set_yscale('log')
-        ax5.legend()
+        leg5 = ax5.legend()
+        if leg5:
+            self.text_objects.append(leg5)
         ax5.grid(True, alpha=0.3)
         
         # Overall title with timestamp - make it more prominent
@@ -244,13 +430,30 @@ class WeightVisualizer:
             elapsed = time.time() - self.last_load_time
             title = 'Neural Network Weight Visualization - Tetris AI'
             
-            # Main title
-            fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
+            # Main title - clear old and add new
+            if update_existing:
+                # Remove old suptitle if exists
+                if hasattr(fig, '_suptitle') and fig._suptitle is not None:
+                    try:
+                        fig._suptitle.remove()
+                    except:
+                        pass
             
-            # Subtitle line 1: Timestamp (removed emoji for font compatibility)
-            subtitle1 = f'Last Load: {load_time_str} ({elapsed:.1f}s ago) | Load #{self.load_count}'
-            fig.text(0.5, 0.95, subtitle1, ha='center', fontsize=10, 
-                    style='italic', color='blue', weight='bold')
+            suptitle = fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
+            self.text_objects.append(suptitle)
+            
+            # Subtitle line 1: Clear timestamp showing when data was loaded
+            if elapsed < 60:
+                time_ago = f"{elapsed:.1f}s ago"
+            elif elapsed < 3600:
+                time_ago = f"{elapsed/60:.1f}min ago"
+            else:
+                time_ago = f"{elapsed/3600:.1f}hr ago"
+            
+            subtitle1 = f'Data loaded: {load_time_str} ({time_ago}) | Load #{self.load_count}'
+            text1 = fig.text(0.5, 0.95, subtitle1, ha='center', fontsize=11, 
+                    style='normal', color='green', weight='bold')
+            self.text_objects.append(text1)
             
             # Subtitle line 2: Metadata (if available)
             if self.metadata['epsilon'] is not None:
@@ -258,26 +461,52 @@ class WeightVisualizer:
                               f"Episodes: {self.metadata['training_episodes']} | "
                               f"Games: {self.metadata['total_games']} | "
                               f"Best Score: {self.metadata['best_score']}")
-                fig.text(0.5, 0.92, metadata_str, ha='center', fontsize=9, 
+                text2 = fig.text(0.5, 0.92, metadata_str, ha='center', fontsize=9, 
                         style='normal', color='darkblue')
+                self.text_objects.append(text2)
         else:
             title = 'Neural Network Weight Visualization - Tetris AI'
-            fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
-            fig.text(0.5, 0.95, 'No weights loaded yet', ha='center', fontsize=10, 
+            suptitle = fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
+            self.text_objects.append(suptitle)
+            text3 = fig.text(0.5, 0.95, 'No weights loaded yet', ha='center', fontsize=10, 
                     style='italic', color='red')
+            self.text_objects.append(text3)
         
         if save_file:
             plt.savefig(save_file, dpi=150, bbox_inches='tight')
             print(f"Visualization saved to {save_file}")
-            plt.close()  # Close figure to free memory
+            if not update_existing:
+                plt.close()  # Close figure to free memory only if not updating
         else:
-            # Only show if not saving (interactive mode)
-            try:
-                plt.show()
-            except Exception as e:
-                print(f"Note: Could not display plot interactively: {e}")
-                print("Use --save option to save visualization to file")
-                plt.close()
+            # Interactive mode - show or update
+            if update_existing:
+                # Update existing figure dynamically
+                try:
+                    if fig.canvas is not None:
+                        fig.canvas.draw_idle()  # Use draw_idle instead of draw for better responsiveness
+                        fig.canvas.flush_events()
+                    plt.pause(0.01)  # Small pause to allow GUI to update
+                except Exception as e:
+                    # If update fails, try to recreate
+                    print(f"Warning: Could not update plot: {e}")
+                    raise  # Re-raise to trigger recreation
+            else:
+                # Show new figure
+                try:
+                    plt.show(block=False)  # Non-blocking for dynamic updates
+                    plt.pause(0.1)  # Small pause to ensure display
+                except Exception as e:
+                    print(f"Note: Could not display plot interactively: {e}")
+                    print("Falling back to static display...")
+                    try:
+                        plt.show(block=True)  # Try blocking mode as fallback
+                    except:
+                        print("Use --save option to save visualization to file")
+                        if not update_existing:
+                            try:
+                                plt.close()
+                            except:
+                                pass
     
     def visualize_weights1_detail(self, save_file=None):
         """Detailed visualization of Weights1"""
@@ -347,22 +576,33 @@ class WeightVisualizer:
         else:
             # Only show if not saving (interactive mode)
             try:
-                plt.show()
+                plt.show(block=False)  # Non-blocking
+                plt.pause(0.1)
             except Exception as e:
                 print(f"Note: Could not display plot interactively: {e}")
                 print("Use --save option to save visualization to file")
                 plt.close()
     
     def monitor_changes(self, interval=2.0):
-        """Monitor model file for changes and update visualization"""
+        """Monitor model file for changes and update visualization dynamically"""
         print(f"Monitoring {self.model_file} for changes (every {interval}s)")
         print("Press Ctrl+C to stop")
         print("-" * 60)
+        
+        # Try to enable interactive mode, but handle if it fails
+        try:
+            plt.ion()
+            interactive_available = True
+        except Exception as e:
+            print(f"Warning: Interactive mode not available: {e}")
+            print("Will use static updates instead")
+            interactive_available = False
         
         previous_weights1 = None
         previous_weights2 = None
         previous_mtime = None
         check_count = 0
+        first_load = True
         
         try:
             while True:
@@ -375,66 +615,87 @@ class WeightVisualizer:
                     mtime = os.path.getmtime(self.model_file)
                     file_age = current_time - mtime
                     
-                    # Show status every 10 checks or if file changed
-                    if check_count % 10 == 0 or (previous_mtime is not None and mtime != previous_mtime):
-                        status = "✓ UPDATED" if (previous_mtime is not None and mtime != previous_mtime) else "○ Checking..."
-                        print(f"[{time_str}] {status} | File age: {file_age:.1f}s | Checks: {check_count}")
-                    
                     # Load if file was modified or first time
-                    if previous_mtime is None or mtime != previous_mtime:
+                    # Use strict comparison to detect any change (0.1s tolerance for file system precision)
+                    if previous_mtime is None or abs(mtime - previous_mtime) > 0.1:
                         load_start_time = time.time()
                         if self.load_model():
                             load_duration = time.time() - load_start_time
                             load_time_str = time.strftime('%H:%M:%S', time.localtime(self.last_load_time))
+                            full_timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.last_load_time))
                             
-                            # Show clear timestamp when load completes
-                            print(f"\n{'='*60}")
-                            print(f"[{load_time_str}] ✅ NEW WEIGHTS LOADED! (Load #{self.load_count})")
-                            print(f"    Load duration: {load_duration*1000:.1f}ms")
-                            print(f"    Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.last_load_time))}")
-                            print(f"{'='*60}")
+                            # Show timestamp when data is loaded
+                            print(f"[{load_time_str}] ✅ Data loaded at {full_timestamp} (Load #{self.load_count})")
                             
-                            # Check if weights changed
-                            if previous_weights1 is not None:
-                                diff1 = np.abs(self.weights1 - previous_weights1)
-                                diff2 = np.abs(self.weights2 - previous_weights2) if previous_weights2 is not None else None
-                                
-                                max_diff1 = np.max(diff1)
-                                mean_diff1 = np.mean(diff1)
-                                
-                                if max_diff1 > 0.0001:  # Significant change
-                                    print(f"[{load_time_str}] ⚡ WEIGHTS UPDATED!")
-                                    print(f"  Weights1 - Max change: {max_diff1:.6f}, Mean change: {mean_diff1:.6f}")
-                                    if diff2 is not None:
-                                        max_diff2 = np.max(diff2)
-                                        mean_diff2 = np.mean(diff2)
-                                        print(f"  Weights2 - Max change: {max_diff2:.6f}, Mean change: {mean_diff2:.6f}")
-                                    print("-" * 60)
-                                    
-                                    # Update visualization with new timestamp
-                                    self.visualize_all()
+                            # Update visualization dynamically
+                            try:
+                                if first_load:
+                                    # First time: create new visualization
+                                    self.visualize_all(update_existing=False)
+                                    first_load = False
+                                    print(f"[{load_time_str}] 📊 Visualization window opened")
                                 else:
-                                    print(f"[{load_time_str}] File changed but weights unchanged (noise < 0.0001)")
-                                    # Still update visualization to show new timestamp
-                                    self.visualize_all()
-                            else:
-                                # First load
-                                print(f"[{load_time_str}] 📊 Initial model loaded - displaying visualization")
-                                self.visualize_all()
+                                    # Subsequent updates: refresh existing plots
+                                    if interactive_available and self.fig is not None and plt.fignum_exists(self.fig.number):
+                                        self.visualize_all(update_existing=True)
+                                    else:
+                                        # Window was closed or interactive mode failed - recreate
+                                        print(f"[{load_time_str}] Recreating visualization window...")
+                                        self.visualize_all(update_existing=False)
+                            except Exception as viz_error:
+                                print(f"[{load_time_str}] ⚠ Error updating visualization: {viz_error}")
+                                # Try to recreate on next update
+                                first_load = True
+                                if self.fig is not None:
+                                    try:
+                                        plt.close(self.fig)
+                                    except:
+                                        pass
+                                    self.fig = None
                             
                             previous_weights1 = self.weights1.copy()
                             previous_weights2 = self.weights2.copy() if self.weights2 is not None else None
                             previous_mtime = mtime
+                    else:
+                        # File not changed - show status every 20 checks
+                        if check_count % 20 == 0:
+                            print(f"[{time_str}] Waiting for changes... (File age: {file_age:.1f}s)")
                 else:
                     if check_count % 10 == 0:
                         print(f"[{time_str}] ⚠ File not found: {self.model_file}")
                 
-                time.sleep(interval)
+                # Use shorter sleep with event processing to avoid blocking
+                # This prevents matplotlib from becoming non-responsive
+                sleep_chunks = max(1, int(interval * 10))
+                chunk_time = interval / sleep_chunks
+                for _ in range(sleep_chunks):
+                    try:
+                        # Process GUI events during sleep to keep matplotlib responsive
+                        if interactive_available and plt.isinteractive():
+                            plt.pause(0.01)
+                    except:
+                        pass
+                    time.sleep(chunk_time)
                 
         except KeyboardInterrupt:
-            elapsed = time.time() - (current_time - check_count * interval)
             print(f"\n[{time.strftime('%H:%M:%S')}] Monitoring stopped after {check_count} checks")
             print(f"Total loads: {self.load_count}")
+            try:
+                plt.ioff()  # Turn off interactive mode
+                if self.fig is not None:
+                    plt.close(self.fig)
+            except:
+                pass
+        except Exception as e:
+            print(f"\nError during monitoring: {e}")
+            import traceback
+            traceback.print_exc()
+            try:
+                plt.ioff()
+                if self.fig is not None:
+                    plt.close(self.fig)
+            except:
+                pass
 
 
 def main():
@@ -457,10 +718,10 @@ def main():
     visualizer = WeightVisualizer(args.file)
     
     if args.monitor:
-        if visualizer.load_model():
-            visualizer.visualize_all()
-            visualizer.monitor_changes(args.interval)
+        # For monitoring, let monitor_changes handle everything (no double load)
+        visualizer.monitor_changes(args.interval)
     else:
+        # For single visualization, load and display once
         if visualizer.load_model():
             if args.detail:
                 visualizer.visualize_weights1_detail(args.save)
