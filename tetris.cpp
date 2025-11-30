@@ -14,6 +14,23 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include "rl_agent.h"
+#include "parameter_tuner.h"
+#include "game_classes.h"
+
+// Debug logging function
+void debugLog(const std::string& message) {
+    static std::ofstream debug_file("debug.log", std::ios::app);
+    if (debug_file.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        debug_file << "[" << time_t << "] " << message << "\n";
+        debug_file.flush();
+    }
+}
 
 // Tetris pieces (tetrominoes) - each piece is defined by its shape
 // Format: [rotations][y][x] where each rotation is a 4x4 grid
@@ -80,108 +97,98 @@ const int PIECE_COLORS[7] = {
     7   // L - White
 };
 
-struct Point {
-    int x, y;
-    Point(int x = 0, int y = 0) : x(x), y(y) {}
-};
+// Class definitions are in game_classes.h
+// Implementations below:
 
-class TetrisPiece {
-public:
-    int type;
-    int x, y;
-    int rotation;
-    int color;
-    
-    TetrisPiece(int piece_type = 0, int x = 0, int y = 0) 
-        : type(piece_type), x(x), y(y), rotation(0), color(PIECE_COLORS[piece_type]) {}
-    
-    void getShape(int shape[4][4]) const {
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                shape[i][j] = PIECES[type][rotation][i][j];
+TetrisPiece::TetrisPiece(int piece_type, int x, int y) 
+    : type(piece_type), x(x), y(y), rotation(0), color(PIECE_COLORS[piece_type]) {}
+
+void TetrisPiece::getShape(int shape[4][4]) const {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            shape[i][j] = PIECES[type][rotation][i][j];
+        }
+    }
+}
+
+void TetrisPiece::rotate() {
+    rotation = (rotation + 1) % 4;
+}
+
+std::vector<Point> TetrisPiece::getBlocks() const {
+    std::vector<Point> blocks;
+    int shape[4][4];
+    getShape(shape);
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            if (shape[dy][dx]) {
+                blocks.push_back(Point(x + dx, y + dy));
             }
         }
     }
-    
-    void rotate() {
-        rotation = (rotation + 1) % 4;
-    }
-    
-    std::vector<Point> getBlocks() const {
-        std::vector<Point> blocks;
-        int shape[4][4];
-        getShape(shape);
-        for (int dy = 0; dy < 4; dy++) {
-            for (int dx = 0; dx < 4; dx++) {
-                if (shape[dy][dx]) {
-                    blocks.push_back(Point(x + dx, y + dy));
-                }
-            }
-        }
-        return blocks;
-    }
-};
+    return blocks;
+}
 
-class TetrisGame {
-public:
-    static const int WIDTH = 10;
-    static const int HEIGHT = 20;
-    
-    std::vector<std::vector<int>> board;
-    TetrisPiece* current_piece;
-    TetrisPiece* next_piece;
-    int score;
-    int lines_cleared;
-    int level;
-    bool game_over;
-    bool paused;
-    bool ai_enabled;
-    double fall_delay;
-    std::chrono::steady_clock::time_point last_fall_time;
-    std::chrono::steady_clock::time_point last_ai_time;
-    
-    TetrisGame() 
-        : board(HEIGHT, std::vector<int>(WIDTH, 0)),
-          current_piece(nullptr),
-          next_piece(nullptr),
-          score(0),
-          lines_cleared(0),
-          level(1),
-          game_over(false),
-          paused(false),
-          ai_enabled(false),
-          fall_delay(0.5),
-          last_fall_time(std::chrono::steady_clock::now()),
-          last_ai_time(std::chrono::steady_clock::now()) {
-        spawnPiece();
-    }
-    
-    ~TetrisGame() {
+TetrisGame::TetrisGame() 
+    : board(HEIGHT, std::vector<int>(WIDTH, 0)),
+      current_piece(nullptr),
+      next_piece(nullptr),
+      score(0),
+      lines_cleared(0),
+      level(1),
+      game_over(false),
+      paused(false),
+      ai_enabled(false),
+      training_mode(false),
+      last_score(0),
+      last_lines(0),
+      fall_delay(0.5),
+      last_fall_time(std::chrono::steady_clock::now()),
+      last_ai_time(std::chrono::steady_clock::now()) {
+    spawnPiece();
+}
+
+TetrisGame::~TetrisGame() {
+    // Only delete if pointers are different to avoid double deletion
+    if (current_piece != nullptr) {
         delete current_piece;
+        current_piece = nullptr;
+    }
+    if (next_piece != nullptr && next_piece != current_piece) {
         delete next_piece;
+        next_piece = nullptr;
+    }
+}
+
+void TetrisGame::spawnPiece() {
+    // Delete old current_piece if it exists (shouldn't happen, but safety check)
+    if (current_piece != nullptr && current_piece != next_piece) {
+        delete current_piece;
     }
     
-    void spawnPiece() {
-        if (next_piece == nullptr) {
-            int piece_type = rand() % 7;
-            next_piece = new TetrisPiece(piece_type);
-        }
-        
-        current_piece = next_piece;
-        current_piece->x = WIDTH / 2 - 2;
-        current_piece->y = 0;
-        
-        // Check if game over
-        if (checkCollision(*current_piece)) {
-            game_over = true;
-        }
-        
-        // Generate next piece
+    if (next_piece == nullptr) {
         int piece_type = rand() % 7;
         next_piece = new TetrisPiece(piece_type);
     }
     
-    bool checkCollision(const TetrisPiece& piece, int dx = 0, int dy = 0) const {
+    // Take ownership of next_piece
+    current_piece = next_piece;
+    next_piece = nullptr;  // Clear next_piece so we don't double-delete
+    
+    current_piece->x = WIDTH / 2 - 2;
+    current_piece->y = 0;
+    
+    // Check if game over
+    if (checkCollision(*current_piece)) {
+        game_over = true;
+    }
+    
+    // Generate next piece
+    int piece_type = rand() % 7;
+    next_piece = new TetrisPiece(piece_type);
+}
+
+bool TetrisGame::checkCollision(const TetrisPiece& piece, int dx, int dy) const {
         std::vector<Point> blocks = piece.getBlocks();
         for (const auto& block : blocks) {
             int nx = block.x + dx;
@@ -193,12 +200,12 @@ public:
             // Check placed blocks (only check if within board)
             if (ny >= 0 && board[ny][nx] != 0) {
                 return true;
-            }
         }
-        return false;
     }
-    
-    void placePiece() {
+    return false;
+}
+
+void TetrisGame::placePiece() {
         if (current_piece == nullptr) return;
         
         std::vector<Point> blocks = current_piece->getBlocks();
@@ -222,46 +229,46 @@ public:
         level = lines_cleared / 10 + 1;
         fall_delay = std::max(0.05, 0.5 - (level - 1) * 0.05);
         
-        delete current_piece;
-        current_piece = nullptr;
-    }
-    
-    int clearLines() {
-        std::vector<int> lines_to_clear;
-        for (int y = 0; y < HEIGHT; y++) {
-            bool full = true;
-            for (int x = 0; x < WIDTH; x++) {
-                if (board[y][x] == 0) {
-                    full = false;
-                    break;
-                }
-            }
-            if (full) {
-                lines_to_clear.push_back(y);
+    delete current_piece;
+    current_piece = nullptr;
+}
+
+int TetrisGame::clearLines() {
+    std::vector<int> lines_to_clear;
+    for (int y = 0; y < HEIGHT; y++) {
+        bool full = true;
+        for (int x = 0; x < WIDTH; x++) {
+            if (board[y][x] == 0) {
+                full = false;
+                break;
             }
         }
-        
-        // Remove lines from bottom to top
-        for (auto it = lines_to_clear.rbegin(); it != lines_to_clear.rend(); ++it) {
-            board.erase(board.begin() + *it);
-            board.insert(board.begin(), std::vector<int>(WIDTH, 0));
+        if (full) {
+            lines_to_clear.push_back(y);
         }
-        
-        return lines_to_clear.size();
     }
     
-    bool movePiece(int dx, int dy) {
-        if (current_piece == nullptr) return false;
-        
-        if (!checkCollision(*current_piece, dx, dy)) {
-            current_piece->x += dx;
-            current_piece->y += dy;
-            return true;
-        }
-        return false;
+    // Remove lines from bottom to top
+    for (auto it = lines_to_clear.rbegin(); it != lines_to_clear.rend(); ++it) {
+        board.erase(board.begin() + *it);
+        board.insert(board.begin(), std::vector<int>(WIDTH, 0));
     }
     
-    bool rotatePiece() {
+    return lines_to_clear.size();
+}
+
+bool TetrisGame::movePiece(int dx, int dy) {
+    if (current_piece == nullptr) return false;
+    
+    if (!checkCollision(*current_piece, dx, dy)) {
+        current_piece->x += dx;
+        current_piece->y += dy;
+        return true;
+    }
+    return false;
+}
+
+bool TetrisGame::rotatePiece() {
         if (current_piece == nullptr) return false;
         
         int old_rotation = current_piece->rotation;
@@ -281,55 +288,78 @@ public:
             return false;
         }
         return true;
-    }
+}
+
+void TetrisGame::hardDrop() {
+    if (current_piece == nullptr) return;
     
-    void hardDrop() {
-        if (current_piece == nullptr) return;
-        
-        while (movePiece(0, 1)) {
-            score += 2;  // Bonus points for hard drop
-        }
+    // Safety limit to prevent infinite loop
+    int drop_attempts = 0;
+    while (movePiece(0, 1) && drop_attempts < HEIGHT * 2) {
+        score += 2;  // Bonus points for hard drop
+        drop_attempts++;
+    }
+    if (drop_attempts >= HEIGHT * 2) {
+        // Safety: force place piece if stuck
         placePiece();
         spawnPiece();
+        return;
     }
+    placePiece();
+    spawnPiece();
+}
+
+void TetrisGame::update() {
+    if (game_over || paused) return;
     
-    void update() {
-        if (game_over || paused) return;
-        
-        auto current_time = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            current_time - last_fall_time).count() / 1000.0;
-        
-        if (elapsed >= fall_delay) {
-            if (current_piece == nullptr) {
-                spawnPiece();
-            } else if (!movePiece(0, 1)) {
-                placePiece();
-                spawnPiece();
-            }
-            last_fall_time = current_time;
+    auto current_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        current_time - last_fall_time).count() / 1000.0;
+    
+    if (elapsed >= fall_delay) {
+        if (current_piece == nullptr) {
+            spawnPiece();
+        } else if (!movePiece(0, 1)) {
+            placePiece();
+            spawnPiece();
+        }
+        last_fall_time = current_time;
+    }
+}
+
+void TetrisGame::executeAIMove(int rotation, int x_pos) {
+    if (current_piece == nullptr) return;
+    
+    // Rotate to desired rotation (with safety limit)
+    int rotation_attempts = 0;
+    while (current_piece->rotation != rotation && rotation_attempts < 10) {
+        rotatePiece();
+        rotation_attempts++;
+    }
+    if (rotation_attempts >= 10) {
+        // Debug: rotation stuck
+        static int debug_count = 0;
+        if (debug_count++ % 100 == 0) {
+            // Could log to file or screen, but avoiding I/O for now
         }
     }
     
-    void executeAIMove(int rotation, int x_pos) {
-        if (current_piece == nullptr) return;
-        
-        // Rotate to desired rotation
-        while (current_piece->rotation != rotation) {
-            rotatePiece();
-        }
-        
-        // Move to desired x position
-        int target_x = x_pos;
-        while (current_piece->x < target_x && movePiece(1, 0)) {}
-        while (current_piece->x > target_x && movePiece(-1, 0)) {}
-        
-        // Hard drop
-        hardDrop();
+    // Move to desired x position (with safety limits)
+    int target_x = x_pos;
+    int move_attempts = 0;
+    while (current_piece->x < target_x && movePiece(1, 0) && move_attempts < WIDTH * 2) {
+        move_attempts++;
+    }
+    move_attempts = 0;
+    while (current_piece->x > target_x && movePiece(-1, 0) && move_attempts < WIDTH * 2) {
+        move_attempts++;
     }
     
-    // AI helper methods
-    std::vector<std::vector<int>> simulatePlacePiece(const TetrisPiece& piece, int drop_y) const {
+    // Hard drop
+    hardDrop();
+}
+
+std::vector<std::vector<int>> TetrisGame::simulatePlacePiece(const TetrisPiece& piece, int drop_y) const {
         std::vector<std::vector<int>> sim_board = board;
         std::vector<Point> blocks = piece.getBlocks();
         for (const auto& block : blocks) {
@@ -339,10 +369,10 @@ public:
                 sim_board[y][x] = piece.color;
             }
         }
-        return sim_board;
-    }
-    
-    int simulateClearLines(std::vector<std::vector<int>>& sim_board) const {
+    return sim_board;
+}
+
+int TetrisGame::simulateClearLines(std::vector<std::vector<int>>& sim_board) const {
         std::vector<int> lines_to_clear;
         for (int y = 0; y < HEIGHT; y++) {
             bool full = true;
@@ -362,19 +392,19 @@ public:
             sim_board.insert(sim_board.begin(), std::vector<int>(WIDTH, 0));
         }
         
-        return lines_to_clear.size();
-    }
-    
-    int getColumnHeight(int x, const std::vector<std::vector<int>>& sim_board) const {
+    return lines_to_clear.size();
+}
+
+int TetrisGame::getColumnHeight(int x, const std::vector<std::vector<int>>& sim_board) const {
         for (int y = 0; y < HEIGHT; y++) {
             if (sim_board[y][x] != 0) {
                 return HEIGHT - y;
             }
         }
-        return 0;
-    }
-    
-    int countHoles(const std::vector<std::vector<int>>& sim_board) const {
+    return 0;
+}
+
+int TetrisGame::countHoles(const std::vector<std::vector<int>>& sim_board) const {
         int holes = 0;
         for (int x = 0; x < WIDTH; x++) {
             bool block_found = false;
@@ -386,160 +416,36 @@ public:
                 }
             }
         }
-        return holes;
-    }
-    
-    int calculateBumpiness(const std::vector<std::vector<int>>& sim_board) const {
+    return holes;
+}
+
+int TetrisGame::calculateBumpiness(const std::vector<std::vector<int>>& sim_board) const {
         int bumpiness = 0;
         for (int x = 0; x < WIDTH - 1; x++) {
             int h1 = getColumnHeight(x, sim_board);
             int h2 = getColumnHeight(x + 1, sim_board);
             bumpiness += abs(h1 - h2);
         }
-        return bumpiness;
-    }
-    
-    int getAggregateHeight(const std::vector<std::vector<int>>& sim_board) const {
-        int height = 0;
-        for (int x = 0; x < WIDTH; x++) {
-            height += getColumnHeight(x, sim_board);
-        }
-        return height;
-    }
-};
+    return bumpiness;
+}
 
-// AI Player class
-class TetrisAI {
-public:
-    struct Move {
-        int rotation;
-        int x;
-        double score;
-    };
-    
-    // Heuristic weights (tuned for good gameplay)
-    static constexpr double WEIGHT_AGGREGATE_HEIGHT = -0.510066;
-    static constexpr double WEIGHT_COMPLETE_LINES = 0.760666;
-    static constexpr double WEIGHT_HOLES = -0.35663;
-    static constexpr double WEIGHT_BUMPINESS = -0.184483;
-    static constexpr double WEIGHT_LANDING_HEIGHT = -0.1;
-    
-    Move findBestMove(const TetrisGame& game) {
-        if (game.current_piece == nullptr) {
-            return {0, 0, -999999};
-        }
-        
-        Move best_move = {0, 0, -999999};
-        TetrisPiece piece = *game.current_piece;
-        
-        // Try all rotations
-        for (int rot = 0; rot < 4; rot++) {
-            piece.rotation = rot;
-            
-            // Try all horizontal positions
-            for (int x = -4; x < game.WIDTH + 4; x++) {
-                piece.x = x;
-                piece.y = 0;
-                
-                // Check if starting position is valid
-                if (game.checkCollision(piece)) {
-                    continue;
-                }
-                
-                // Find drop position
-                int drop_y = 0;
-                while (!game.checkCollision(piece, 0, drop_y + 1)) {
-                    drop_y++;
-                }
-                
-                // Calculate final position
-                int final_y = piece.y + drop_y;
-                
-                // Simulate placing the piece
-                std::vector<std::vector<int>> sim_board = game.simulatePlacePiece(piece, final_y);
-                int lines_cleared = game.simulateClearLines(sim_board);
-                
-                // Evaluate the move
-                double score = evaluateBoard(sim_board, lines_cleared, final_y);
-                
-                if (score > best_move.score) {
-                    best_move.rotation = rot;
-                    best_move.x = x;
-                    best_move.score = score;
-                }
-            }
-        }
-        
-        return best_move;
+int TetrisGame::getAggregateHeight(const std::vector<std::vector<int>>& sim_board) const {
+    int height = 0;
+    for (int x = 0; x < WIDTH; x++) {
+        height += getColumnHeight(x, sim_board);
     }
-    
-    double evaluateBoard(const std::vector<std::vector<int>>& board, int lines_cleared, int landing_height) const {
-        double score = 0;
-        
-        // Lines cleared is very important
-        score += WEIGHT_COMPLETE_LINES * lines_cleared * 100;
-        
-        // Aggregate height (lower is better)
-        int aggregate_height = 0;
-        for (int x = 0; x < 10; x++) {
-            aggregate_height += getColumnHeight(x, board);
-        }
-        score += WEIGHT_AGGREGATE_HEIGHT * aggregate_height;
-        
-        // Holes (bad)
-        int holes = countHoles(board);
-        score += WEIGHT_HOLES * holes * 100;
-        
-        // Bumpiness (smooth surface is better)
-        int bumpiness = calculateBumpiness(board);
-        score += WEIGHT_BUMPINESS * bumpiness;
-        
-        // Landing height (lower is better)
-        score += WEIGHT_LANDING_HEIGHT * landing_height;
-        
-        return score;
-    }
-    
-private:
-    int getColumnHeight(int x, const std::vector<std::vector<int>>& board) const {
-        for (int y = 0; y < 20; y++) {
-            if (board[y][x] != 0) {
-                return 20 - y;
-            }
-        }
-        return 0;
-    }
-    
-    int countHoles(const std::vector<std::vector<int>>& board) const {
-        int holes = 0;
-        for (int x = 0; x < 10; x++) {
-            bool block_found = false;
-            for (int y = 0; y < 20; y++) {
-                if (board[y][x] != 0) {
-                    block_found = true;
-                } else if (block_found) {
-                    holes++;
-                }
-            }
-        }
-        return holes;
-    }
-    
-    int calculateBumpiness(const std::vector<std::vector<int>>& board) const {
-        int bumpiness = 0;
-        for (int x = 0; x < 9; x++) {
-            int h1 = getColumnHeight(x, board);
-            int h2 = getColumnHeight(x + 1, board);
-            bumpiness += abs(h1 - h2);
-        }
-        return bumpiness;
-    }
-};
+    return height;
+}
 
-void drawBoard(WINDOW* win, TetrisGame& game) {
+// AI classes moved to rl_agent.h and rl_agent.cpp
+
+void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, ParameterTuner* tuner = nullptr) {
     int height, width;
     getmaxyx(win, height, width);
     (void)height;  // height not used, but required by getmaxyx macro
+    
+    // Reset attributes to normal
+    attrset(0);
     
     // Board dimensions
     int board_x = width / 2 - game.WIDTH / 2 - 1;
@@ -569,6 +475,9 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
             if (game.board[y][x] != 0) {
                 mvaddstr(board_y + y, board_x + x * 2, "[]");
                 mvchgat(board_y + y, board_x + x * 2, 2, A_NORMAL, game.board[y][x], NULL);
+            } else {
+                // Clear empty spaces to prevent artifacts
+                mvaddstr(board_y + y, board_x + x * 2, "  ");
             }
         }
     }
@@ -616,8 +525,13 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
     snprintf(score_str, sizeof(score_str), "Level: %d", game.level);
     mvaddstr(info_y + 2, info_x, score_str);
     if (game.ai_enabled) {
-        mvaddstr(info_y + 3, info_x, "AI: ON");
-        mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
+        if (game.training_mode) {
+            mvaddstr(info_y + 3, info_x, "AI: TRAINING");
+            mvchgat(info_y + 3, info_x, 13, A_BOLD | A_REVERSE, 1, NULL);
+        } else {
+            mvaddstr(info_y + 3, info_x, "AI: ON");
+            mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
+        }
     } else {
         mvaddstr(info_y + 3, info_x, "AI: OFF");
     }
@@ -630,7 +544,58 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
     mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
     mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
     mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
-    mvaddstr(controls_y + 6, board_x, "P: Pause  Q: Quit");
+    mvaddstr(controls_y + 6, board_x, "T: Training Mode");
+    mvaddstr(controls_y + 7, board_x, "P: Pause  Q: Quit");
+    
+    // Draw training stats if in training mode
+    if (game.training_mode && agent != nullptr) {
+        int stats_y = controls_y + 9;
+        char stats_str[250];
+        const char* model_status = agent->model_loaded ? "[LOADED]" : "[NEW]";
+        snprintf(stats_str, sizeof(stats_str), 
+                "Training: Games=%d Episodes=%d Best=%d Avg=%.0f Epsilon=%.3f Buffer=%zu %s", 
+                agent->total_games, agent->training_episodes, 
+                agent->best_score, agent->average_score, agent->epsilon, agent->replay_buffer.size(), model_status);
+        mvaddstr(stats_y, board_x, stats_str);
+        
+        // Display epsilon-score relationship tracking
+        int epsilon_track_y = stats_y + 3;
+        char epsilon_track_str[200];
+        double epsilon_change = agent->epsilon - agent->last_epsilon;
+        const char* epsilon_trend = "";
+        if (epsilon_change > 0.001) {
+            epsilon_trend = "↑ (increasing)";
+        } else if (epsilon_change < -0.001) {
+            epsilon_trend = "↓ (decreasing)";
+        } else {
+            epsilon_trend = "→ (stable)";
+        }
+        snprintf(epsilon_track_str, sizeof(epsilon_track_str),
+                "Epsilon-Score: Avg=%.0f Eps=%.3f %s | Inc=%d Dec=%d | Change=%.1f%%",
+                agent->average_score, agent->epsilon, epsilon_trend,
+                agent->epsilon_increase_count, agent->epsilon_decrease_count,
+                agent->epsilon_change_reason);
+        mvaddstr(epsilon_track_y, board_x, epsilon_track_str);
+        
+        // Draw weight changes on next line
+        if (agent->training_episodes > 0) {
+            int weight_y = stats_y + 1;
+            std::string weight_stats = agent->q_network.getWeightStatsString(
+                agent->training_episodes, agent->last_batch_error);
+            mvaddstr(weight_y, board_x, weight_stats.c_str());
+        }
+        
+        // Draw parameter tuning info
+        if (tuner != nullptr && agent->training_episodes > 0) {
+            int tuner_y = stats_y + 2;
+            char tuner_str[250];
+            snprintf(tuner_str, sizeof(tuner_str), 
+                    "Tuner: LR=%.4f Gamma=%.3f EpsDec=%.4f EpsMin=%.3f Set=%d/%zu",
+                    agent->learning_rate, agent->gamma, agent->epsilon_decay, 
+                    agent->epsilon_min, tuner->current_param_set_index, tuner->parameter_sets.size());
+            mvaddstr(tuner_y, board_x, tuner_str);
+        }
+    }
     
     // Draw game over or pause message
     if (game.game_over) {
@@ -642,6 +607,9 @@ void drawBoard(WINDOW* win, TetrisGame& game) {
         mvaddstr(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 3, msg);
         mvchgat(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 3, 6, A_BOLD, 0, NULL);
     }
+    
+    // Reset attributes to normal after drawing
+    attrset(0);
 }
 
 void initColors() {
@@ -655,7 +623,30 @@ void initColors() {
     init_pair(7, COLOR_WHITE, COLOR_BLACK);    // L piece
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    std::string model_file = "tetris_model.txt";
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--model" || arg == "-m") {
+            if (i + 1 < argc) {
+                model_file = argv[++i];
+            } else {
+                printw("Error: --model requires a filename\n");
+                refresh();
+                napms(2000);
+                return 1;
+            }
+        } else if (arg == "--help" || arg == "-h") {
+            printw("Usage: %s [--model|-m <filename>]\n", argv[0]);
+            printw("  --model, -m: Load model from specified file (default: tetris_model.txt)\n");
+            printw("  --help, -h:  Show this help message\n");
+            refresh();
+            napms(3000);
+            return 0;
+        }
+    }
+    
     // Initialize random seed
     srand(time(nullptr));
     
@@ -669,12 +660,69 @@ int main() {
     initColors();
     
     TetrisGame game;
-    TetrisAI ai;
+    RLAgent agent(model_file);  // Load from specified model file
+    ParameterTuner tuner;
     
-    // Game loop
+    // Auto-start in training mode for continuous learning
+    game.training_mode = true;
+    game.ai_enabled = true;
+    
+    // Apply initial parameter set
+    ParameterSet initial_params = tuner.getNextParameterSet();
+    tuner.applyParameters(initial_params, agent);
+    
+    std::vector<double> last_state;
+    int last_action_rot = 0;
+    int last_action_x = 0;
+    
+    // Game loop with debugging
+    int loop_count = 0;
+    auto last_debug_time = std::chrono::steady_clock::now();
+    int stuck_detection_count = 0;
+    
+    debugLog("Program started");
+    
     while (true) {
-        // Clear screen
-        clear();
+        loop_count++;
+        
+        // Debug: Check for stuck loop (CPU spinning)
+        auto current_debug_time = std::chrono::steady_clock::now();
+        auto debug_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            current_debug_time - last_debug_time).count();
+        
+        if (debug_elapsed > 5000) {  // More than 5 seconds without progress
+            stuck_detection_count++;
+            std::stringstream ss;
+            ss << "Stuck detection #" << stuck_detection_count << " - Loop: " << loop_count 
+               << " Games: " << agent.total_games << " Episodes: " << agent.training_episodes;
+            debugLog(ss.str());
+            
+            if (stuck_detection_count > 3) {
+                debugLog("FORCE UPDATE: Breaking potential deadlock");
+                // Force game update to break potential deadlock
+                if (!game.game_over && !game.paused) {
+                    game.update();
+                }
+                stuck_detection_count = 0;
+            }
+            last_debug_time = current_debug_time;
+        }
+        
+        // Periodic debug logging
+        if (loop_count % 1000 == 0) {
+            std::stringstream ss;
+            ss << "Loop: " << loop_count << " Games: " << agent.total_games 
+               << " Episodes: " << agent.training_episodes 
+               << " GameOver: " << (game.game_over ? "YES" : "NO")
+               << " Paused: " << (game.paused ? "YES" : "NO")
+               << " AI: " << (game.ai_enabled ? "ON" : "OFF");
+            debugLog(ss.str());
+            last_debug_time = current_debug_time;
+            stuck_detection_count = 0;
+        }
+        // Clear screen and reset attributes
+        erase();
+        attrset(0);  // Reset all attributes to normal
         
         // Handle input
         int key = getch();
@@ -685,6 +733,11 @@ int main() {
             game.paused = !game.paused;
         } else if (key == 'a' || key == 'A') {
             game.ai_enabled = !game.ai_enabled;
+        } else if (key == 't' || key == 'T') {
+            game.training_mode = !game.training_mode;
+            if (game.training_mode) {
+                game.ai_enabled = true;  // Auto-enable AI in training mode
+            }
         } else if (!game.game_over && !game.paused && !game.ai_enabled) {
             if (key == KEY_LEFT) {
                 game.movePiece(-1, 0);
@@ -701,31 +754,213 @@ int main() {
             }
         }
         
-        // AI logic
+        // RL Agent logic
         if (game.ai_enabled && !game.game_over && !game.paused && game.current_piece != nullptr) {
             auto current_time = std::chrono::steady_clock::now();
             auto ai_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 current_time - game.last_ai_time).count();
             
-            // Execute AI move every 100ms (adjustable for AI speed)
+            // Execute AI move every 100ms (with timeout protection)
             if (ai_elapsed >= 100) {
-                TetrisAI::Move best_move = ai.findBestMove(game);
+                // Safety: Limit AI computation time to prevent CPU spinning
+                auto ai_start_time = std::chrono::steady_clock::now();
+                
+                // Extract current state
+                std::vector<double> current_state = agent.extractState(game);
+                
+                // Find best move (with timeout check)
+                RLAgent::Move best_move = agent.findBestMove(game, game.training_mode);
+                
+                // Check if AI computation took too long
+                auto ai_compute_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - ai_start_time).count();
+                if (ai_compute_time > 1000) {
+                    // AI computation took more than 1 second - skip this move to prevent CPU spinning
+                    game.last_ai_time = current_time;
+                    continue;
+                }
+                
                 game.executeAIMove(best_move.rotation, best_move.x);
+                
+                // Collect experience for training
+                if (game.training_mode && last_state.size() > 0) {
+                    // Calculate reward (simplified and clearer reward shaping)
+                    double reward = 0.0;
+                    int score_diff = game.score - game.last_score;
+                    int lines_diff = game.lines_cleared - game.last_lines;
+                    
+                    // Primary rewards (most important) - more generous
+                    reward += lines_diff * 5.0;       // Increased reward for clearing lines (main objective)
+                    reward += score_diff * 0.1;        // Increased reward for score increases
+                    
+                    // Survival bonus (encourage staying alive) - more significant
+                    if (!game.game_over) {
+                        reward += 1.0;  // Increased survival bonus
+                    }
+                    
+                    // Game over penalty
+                    if (game.game_over) {
+                        reward -= 50.0;  // Increased penalty for losing (more significant)
+                    }
+                    
+                    // State quality penalties (prevent bad states) - less harsh
+                    int aggregate_height = game.getAggregateHeight(game.board);
+                    reward -= aggregate_height * 0.05;  // Reduced penalty for high stacks
+                    
+                    int holes = game.countHoles(game.board);
+                    reward -= holes * 0.3;  // Reduced penalty for creating holes
+                    
+                    int bumpiness = game.calculateBumpiness(game.board);
+                    reward -= bumpiness * 0.02;  // Reduced penalty for uneven surface
+                    
+                    // Bonus for keeping board low (encourage good play)
+                    int max_height = 0;
+                    for (int x = 0; x < game.WIDTH; x++) {
+                        int h = game.getColumnHeight(x, game.board);
+                        if (h > max_height) max_height = h;
+                    }
+                    if (max_height < 10) {
+                        reward += 0.5;  // Bonus for keeping board low
+                    }
+                    
+                    // Store experience
+                    Experience exp;
+                    exp.state = last_state;
+                    exp.action_rotation = last_action_rot;
+                    exp.action_x = last_action_x;
+                    exp.reward = reward;
+                    exp.next_state = current_state;
+                    exp.done = game.game_over;
+                    
+                    agent.addExperience(exp);
+                    
+                    // Train periodically
+                    if (agent.replay_buffer.size() >= RLAgent::BATCH_SIZE) {
+                        auto train_start = std::chrono::steady_clock::now();
+                        agent.train();
+                        auto train_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - train_start).count();
+                        if (train_time > 500) {
+                            std::stringstream ss;
+                            ss << "Slow training: " << train_time << "ms";
+                            debugLog(ss.str());
+                        }
+                        
+                        // Record metrics for parameter tuning
+                        tuner.recordError(agent.last_batch_error);
+                        tuner.recordEpsilon(agent.epsilon);
+                        
+                        // Check if we should test new parameters
+                        if (tuner.shouldTestNewParameters()) {
+                            debugLog("Testing new parameter set");
+                            ParameterSet new_params = tuner.getNextParameterSet();
+                            tuner.applyParameters(new_params, agent);
+                            tuner.resetForNewParameters();
+                            
+                            // Log parameter change
+                            std::ofstream logfile("debug.log", std::ios::app);
+                            if (logfile.is_open()) {
+                                logfile << "[TUNER] Switched to new parameters: LR=" << new_params.learning_rate
+                                        << " Gamma=" << new_params.gamma
+                                        << " EpsDecay=" << new_params.epsilon_decay
+                                        << " EpsMin=" << new_params.epsilon_min << std::endl;
+                            }
+                        }
+                    }
+                }
+                
+                // Update last state/action
+                last_state = current_state;
+                last_action_rot = best_move.rotation;
+                last_action_x = best_move.x;
+                game.last_score = game.score;
+                game.last_lines = game.lines_cleared;
+                
                 game.last_ai_time = current_time;
+                
+                // Auto-restart in training mode (handled in main loop)
             }
         }
         
-        // Update game
-        game.update();
+        // Auto-restart in training mode when game over
+        if (game.training_mode && game.game_over) {
+            debugLog("Game over - restarting");
+            // Update training statistics
+            agent.total_games++;
+            if (game.score > agent.best_score) {
+                int old_best = agent.best_score;
+                agent.best_score = game.score;
+                
+                // Save best model to separate file
+                std::string best_model_file = "tetris_model_best.txt";
+                agent.saveModelToFile(best_model_file);
+                
+                // Log best score achievement
+                std::ofstream logfile("debug.log", std::ios::app);
+                if (logfile.is_open()) {
+                    logfile << "[BEST] New best score: " << old_best << " -> " << game.score 
+                            << " | Saved to " << best_model_file << std::endl;
+                }
+                
+                debugLog("New best score! Model saved to tetris_model_best.txt");
+            }
+            
+            // Update running average (simple moving average of last N games)
+            agent.recent_scores_sum += game.score;
+            if (agent.total_games <= RLAgent::RECENT_SCORES_COUNT) {
+                agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
+            } else {
+                // For sliding window, we'd need to track individual scores
+                // For simplicity, use exponential moving average
+                agent.average_score = agent.average_score * 0.99 + game.score * 0.01;
+            }
+            
+            // Record score for parameter tuning
+            tuner.recordScore(game.score);
+            
+            // Update epsilon based on performance (adaptive decay)
+            agent.updateEpsilonBasedOnPerformance();
+            
+            // Save model periodically
+            if (agent.training_episodes % 100 == 0) {
+                agent.saveModel();
+            }
+            
+            // Reset game immediately
+            game.~TetrisGame();
+            new (&game) TetrisGame();
+            game.training_mode = true;
+            game.ai_enabled = true;
+            last_state.clear();
+            
+            // Small delay to show game over briefly and allow screen refresh
+            napms(100);
+            
+            // Force screen refresh after restart to prevent black screen
+            erase();
+            attrset(0);  // Reset attributes
+        }
+        
+        // Update game (only if not game over in training mode, as we'll restart immediately)
+        if (!(game.training_mode && game.game_over)) {
+            game.update();
+        }
         
         // Draw everything
-        drawBoard(stdscr, game);
+        drawBoard(stdscr, game, &agent, &tuner);
         
-        // Refresh screen
+        // Refresh screen and ensure cursor is hidden
         refresh();
+        curs_set(0);  // Keep cursor hidden
         
         // Small delay to prevent excessive CPU usage
-        napms(200);
+        // Shorter delay in training mode for faster training
+        napms(game.training_mode ? 50 : 200);
+    }
+    
+    // Save model on exit if training
+    if (game.training_mode) {
+        agent.saveModel();
     }
     
     endwin();

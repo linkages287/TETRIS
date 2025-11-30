@@ -3,7 +3,9 @@
 # If you're on Windows, you may need to install windows-curses:
 # pip install windows-curses
 
-# No additional requirements for Linux/macOS
+# Python dependencies for weight visualization
+numpy>=1.19.0
+matplotlib>=3.3.0
+
 # For Windows users, uncomment the line below:
 # windows-curses
-
