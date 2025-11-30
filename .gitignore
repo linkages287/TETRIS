@@ -1,5 +1,31 @@
 # Compiled binaries
+# Compiled binaries
 tetris
+weight_visualizer
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model files (keep tetris_model.txt as example, but ignore best models and backups)
+tetris_model_best.txt
+*.model
+*.backup
+
+# Log files
+debug.log
+*.log
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Test files
+test*.png
+test*.txt
 *.o
 *.exe
 
