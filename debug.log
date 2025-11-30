@@ -34581,3 +34581,232 @@
 [1764517448] Stuck detection #1 - Loop: 158094 Games: 988 Episodes: 78282
 [1764517453] Stuck detection #2 - Loop: 158191 Games: 988 Episodes: 78330
 [1764517458] Stuck detection #3 - Loop: 158286 Games: 988 Episodes: 78378
+[MODEL] Successfully loaded tetris_model.txt
+  Epsilon: 0.02, Episodes: 78405, Games: 988, Best Score: 373894
+[1764517963] Program started
+[1764517968] Stuck detection #1 - Loop: 95 Games: 988 Episodes: 78419
+[1764517973] Stuck detection #2 - Loop: 191 Games: 988 Episodes: 78467
+[1764517974] Game over - restarting
+[1764517978] Stuck detection #3 - Loop: 286 Games: 989 Episodes: 78514
+[1764517979] Game over - restarting
+[1764517983] Stuck detection #4 - Loop: 381 Games: 990 Episodes: 78561
+[1764517983] FORCE UPDATE: Breaking potential deadlock
+[1764517984] Game over - restarting
+[1764517988] Stuck detection #1 - Loop: 476 Games: 991 Episodes: 78608
+[1764517993] Stuck detection #2 - Loop: 573 Games: 991 Episodes: 78656
+[1764517997] Game over - restarting
+[1764517999] Stuck detection #3 - Loop: 668 Games: 992 Episodes: 78703
+[1764518004] Stuck detection #4 - Loop: 765 Games: 992 Episodes: 78752
+[1764518004] FORCE UPDATE: Breaking potential deadlock
+[1764518009] Stuck detection #1 - Loop: 861 Games: 992 Episodes: 78800
+[1764518014] Stuck detection #2 - Loop: 957 Games: 992 Episodes: 78848
+[1764518015] Game over - restarting
+[1764518016] Loop: 1000 Games: 993 Episodes: 78869 GameOver: NO Paused: NO AI: ON
+[1764518021] Stuck detection #1 - Loop: 1096 Games: 993 Episodes: 78917
+[1764518026] Stuck detection #2 - Loop: 1192 Games: 993 Episodes: 78965
+[1764518026] Game over - restarting
+[1764518031] Stuck detection #3 - Loop: 1286 Games: 994 Episodes: 79011
+[1764518032] Game over - restarting
+[1764518034] Game over - restarting
+[1764518036] Stuck detection #4 - Loop: 1379 Games: 996 Episodes: 79056
+[1764518036] FORCE UPDATE: Breaking potential deadlock
+[1764518041] Stuck detection #1 - Loop: 1475 Games: 996 Episodes: 79104
+[1764518045] Game over - restarting
+[1764518046] Stuck detection #2 - Loop: 1570 Games: 997 Episodes: 79151
+[1764518051] Stuck detection #3 - Loop: 1667 Games: 997 Episodes: 79199
+[1764518056] Stuck detection #4 - Loop: 1764 Games: 997 Episodes: 79248
+[1764518056] FORCE UPDATE: Breaking potential deadlock
+[1764518058] Game over - restarting
+[1764518060] Game over - restarting
+[1764518061] Stuck detection #1 - Loop: 1857 Games: 999 Episodes: 79293
+[1764518064] Game over - restarting
+[1764518066] Stuck detection #2 - Loop: 1952 Games: 1000 Episodes: 79340
+[1764518069] Loop: 2000 Games: 1000 Episodes: 79364 GameOver: NO Paused: NO AI: ON
+[MODEL] Successfully loaded tetris_model.txt
+  Epsilon: 0.02, Episodes: 79407, Games: 1000, Best Score: 373894
+[1764518208] Program started
+[1764518213] Stuck detection #1 - Loop: 97 Games: 1000 Episodes: 79422
+[1764518215] Game over - restarting
+[1764518218] Stuck detection #2 - Loop: 191 Games: 1001 Episodes: 79469
+[1764518221] Game over - restarting
+[1764518223] Stuck detection #3 - Loop: 285 Games: 1002 Episodes: 79515
+[1764518228] Stuck detection #4 - Loop: 381 Games: 1002 Episodes: 79563
+[1764518228] FORCE UPDATE: Breaking potential deadlock
+[1764518229] Game over - restarting
+[1764518230] Game over - restarting
+[1764518233] Stuck detection #1 - Loop: 474 Games: 1004 Episodes: 79609
+[1764518238] Stuck detection #2 - Loop: 570 Games: 1004 Episodes: 79657
+[1764518238] Game over - restarting
+[1764518241] Game over - restarting
+[1764518243] Stuck detection #3 - Loop: 662 Games: 1006 Episodes: 79702
+[1764518247] Game over - restarting
+[1764518248] Stuck detection #4 - Loop: 757 Games: 1007 Episodes: 79749
+[1764518248] FORCE UPDATE: Breaking potential deadlock
+[1764518251] Game over - restarting
+[1764518253] Stuck detection #1 - Loop: 851 Games: 1008 Episodes: 79794
+[1764518254] Game over - restarting
+[1764518258] Stuck detection #2 - Loop: 946 Games: 1009 Episodes: 79841
+[1764518261] Loop: 1000 Games: 1009 Episodes: 79868 GameOver: NO Paused: NO AI: ON
+[1764518265] Game over - restarting
+[1764518266] Stuck detection #1 - Loop: 1095 Games: 1010 Episodes: 79914
+[1764518271] Stuck detection #2 - Loop: 1192 Games: 1010 Episodes: 79963
+[1764518276] Stuck detection #3 - Loop: 1288 Games: 1010 Episodes: 80011
+[1764518281] Stuck detection #4 - Loop: 1384 Games: 1010 Episodes: 80059
+[1764518281] FORCE UPDATE: Breaking potential deadlock
+[1764518285] Game over - restarting
+[1764518286] Stuck detection #1 - Loop: 1478 Games: 1011 Episodes: 80105
+[1764518291] Stuck detection #2 - Loop: 1575 Games: 1011 Episodes: 80153
+[1764518296] Stuck detection #3 - Loop: 1672 Games: 1011 Episodes: 80202
+[1764518301] Stuck detection #4 - Loop: 1769 Games: 1011 Episodes: 80250
+[1764518301] FORCE UPDATE: Breaking potential deadlock
+[1764518302] Game over - restarting
+[1764518304] Game over - restarting
+[1764518305] Game over - restarting
+[1764518306] Stuck detection #1 - Loop: 1860 Games: 1014 Episodes: 80293
+[1764518309] Game over - restarting
+[1764518310] Game over - restarting
+[1764518311] Game over - restarting
+[1764518311] Stuck detection #2 - Loop: 1951 Games: 1017 Episodes: 80338
+[1764518312] Game over - restarting
+[1764518314] Game over - restarting
+[1764518314] Loop: 2000 Games: 1019 Episodes: 80361 GameOver: NO Paused: NO AI: ON
+[1764518315] Game over - restarting
+[1764518318] Game over - restarting
+[1764518319] Stuck detection #1 - Loop: 2093 Games: 1021 Episodes: 80405
+[1764518321] Game over - restarting
+[1764518324] Stuck detection #2 - Loop: 2188 Games: 1022 Episodes: 80452
+[1764518326] Game over - restarting
+[1764518329] Stuck detection #3 - Loop: 2283 Games: 1023 Episodes: 80498
+[1764518331] Game over - restarting
+[1764518334] Stuck detection #4 - Loop: 2377 Games: 1024 Episodes: 80545
+[1764518334] FORCE UPDATE: Breaking potential deadlock
+[1764518334] Game over - restarting
+[1764518339] Game over - restarting
+[1764518339] Stuck detection #1 - Loop: 2470 Games: 1026 Episodes: 80590
+[1764518341] Game over - restarting
+[1764518344] Stuck detection #2 - Loop: 2565 Games: 1027 Episodes: 80637
+[1764518345] Game over - restarting
+[1764518349] Game over - restarting
+[1764518349] Stuck detection #3 - Loop: 2658 Games: 1029 Episodes: 80683
+[1764518354] Game over - restarting
+[1764518354] Stuck detection #4 - Loop: 2752 Games: 1030 Episodes: 80729
+[1764518354] FORCE UPDATE: Breaking potential deadlock
+[1764518357] Game over - restarting
+[1764518359] Stuck detection #1 - Loop: 2844 Games: 1031 Episodes: 80775
+[1764518361] Game over - restarting
+[1764518364] Stuck detection #2 - Loop: 2936 Games: 1032 Episodes: 80820
+[1764518368] Loop: 3000 Games: 1032 Episodes: 80852 GameOver: NO Paused: NO AI: ON
+[1764518372] Game over - restarting
+[1764518373] Stuck detection #1 - Loop: 3092 Games: 1033 Episodes: 80898
+[MODEL] Successfully loaded tetris_model_best.txt
+  Epsilon: 0.0240217, Episodes: 74359, Games: 947, Best Score: 373894
+[1764518387] Program started
+[1764518392] Stuck detection #1 - Loop: 96 Games: 947 Episodes: 74374
+[1764518397] Stuck detection #2 - Loop: 190 Games: 947 Episodes: 74421
+[1764518402] Stuck detection #3 - Loop: 284 Games: 947 Episodes: 74468
+[1764518407] Stuck detection #4 - Loop: 378 Games: 947 Episodes: 74515
+[1764518407] FORCE UPDATE: Breaking potential deadlock
+[1764518412] Stuck detection #1 - Loop: 472 Games: 947 Episodes: 74562
+[1764518412] Game over - restarting
+[1764518417] Stuck detection #2 - Loop: 564 Games: 948 Episodes: 74607
+[1764518422] Stuck detection #3 - Loop: 658 Games: 948 Episodes: 74654
+[1764518427] Game over - restarting
+[1764518427] Stuck detection #4 - Loop: 750 Games: 949 Episodes: 74699
+[1764518427] FORCE UPDATE: Breaking potential deadlock
+[1764518432] Stuck detection #1 - Loop: 843 Games: 949 Episodes: 74746
+[1764518437] Stuck detection #2 - Loop: 936 Games: 949 Episodes: 74792
+[1764518440] Game over - restarting
+[1764518441] Loop: 1000 Games: 950 Episodes: 74824 GameOver: NO Paused: NO AI: ON
+[1764518446] Stuck detection #1 - Loop: 1094 Games: 950 Episodes: 74871
+[1764518451] Stuck detection #2 - Loop: 1186 Games: 950 Episodes: 74917
+[1764518454] Game over - restarting
+[1764518456] Stuck detection #3 - Loop: 1277 Games: 951 Episodes: 74962
+[1764518461] Stuck detection #4 - Loop: 1370 Games: 951 Episodes: 75008
+[1764518461] FORCE UPDATE: Breaking potential deadlock
+[1764518464] Game over - restarting
+[1764518466] Stuck detection #1 - Loop: 1461 Games: 952 Episodes: 75053
+[1764518471] Stuck detection #2 - Loop: 1554 Games: 952 Episodes: 75100
+[1764518476] Stuck detection #3 - Loop: 1648 Games: 952 Episodes: 75147
+[1764518481] Stuck detection #4 - Loop: 1742 Games: 952 Episodes: 75194
+[1764518481] FORCE UPDATE: Breaking potential deadlock
+[1764518486] Stuck detection #1 - Loop: 1836 Games: 952 Episodes: 75241
+[1764518491] Game over - restarting
+[1764518491] Stuck detection #2 - Loop: 1928 Games: 953 Episodes: 75286
+[1764518492] Game over - restarting
+[MODEL] Successfully loaded tetris_model_best.txt
+  Epsilon: 0.0240217, Episodes: 74359, Games: 947, Best Score: 373894
+[1764518610] Program started
+[1764518615] Stuck detection #1 - Loop: 96 Games: 947 Episodes: 74374
+[1764518620] Stuck detection #2 - Loop: 189 Games: 947 Episodes: 74420
+[1764518625] Stuck detection #3 - Loop: 285 Games: 947 Episodes: 74468
+[1764518630] Stuck detection #4 - Loop: 379 Games: 947 Episodes: 74515
+[1764518630] FORCE UPDATE: Breaking potential deadlock
+[1764518635] Stuck detection #1 - Loop: 473 Games: 947 Episodes: 74562
+[1764518638] Game over - restarting
+[1764518640] Stuck detection #2 - Loop: 565 Games: 948 Episodes: 74607
+[1764518644] Game over - restarting
+[1764518645] Stuck detection #3 - Loop: 657 Games: 949 Episodes: 74653
+[MODEL] Successfully loaded tetris_model_best.txt
+  Epsilon: 0.0240217, Episodes: 74359, Games: 947, Best Score: 373894
+[1764518804] Program started
+[1764518809] Stuck detection #1 - Loop: 98 Games: 947 Episodes: 74375
+[1764518814] Game over - restarting
+[1764518814] Stuck detection #2 - Loop: 193 Games: 948 Episodes: 74421
+[1764518819] Stuck detection #3 - Loop: 290 Games: 948 Episodes: 74470
+[1764518820] Game over - restarting
+[1764518824] Stuck detection #4 - Loop: 385 Games: 949 Episodes: 74517
+[1764518824] FORCE UPDATE: Breaking potential deadlock
+[1764518829] Stuck detection #1 - Loop: 482 Games: 949 Episodes: 74565
+[1764518829] Game over - restarting
+[1764518832] Game over - restarting
+[1764518834] Stuck detection #2 - Loop: 575 Games: 951 Episodes: 74611
+[1764518839] Stuck detection #3 - Loop: 672 Games: 951 Episodes: 74659
+[1764518840] Game over - restarting
+[1764518844] Stuck detection #4 - Loop: 767 Games: 952 Episodes: 74706
+[1764518844] FORCE UPDATE: Breaking potential deadlock
+[1764518845] Game over - restarting
+[1764518849] Stuck detection #1 - Loop: 862 Games: 953 Episodes: 74753
+[1764518853] Game over - restarting
+[1764518854] Stuck detection #2 - Loop: 957 Games: 954 Episodes: 74800
+[1764518857] Loop: 1000 Games: 954 Episodes: 74822 GameOver: NO Paused: NO AI: ON
+[1764518862] Stuck detection #1 - Loop: 1097 Games: 954 Episodes: 74870
+[1764518867] Stuck detection #2 - Loop: 1194 Games: 954 Episodes: 74919
+[1764518869] Game over - restarting
+[1764518872] Stuck detection #3 - Loop: 1289 Games: 955 Episodes: 74966
+[1764518877] Stuck detection #4 - Loop: 1385 Games: 955 Episodes: 75014
+[1764518877] FORCE UPDATE: Breaking potential deadlock
+[1764518878] Game over - restarting
+[1764518882] Stuck detection #1 - Loop: 1479 Games: 956 Episodes: 75059
+[1764518887] Stuck detection #2 - Loop: 1575 Games: 956 Episodes: 75107
+[1764518888] Game over - restarting
+[1764518892] Stuck detection #3 - Loop: 1670 Games: 957 Episodes: 75154
+[1764518894] Game over - restarting
+[1764518897] Stuck detection #4 - Loop: 1764 Games: 958 Episodes: 75201
+[1764518897] FORCE UPDATE: Breaking potential deadlock
+[1764518897] Game over - restarting
+[1764518898] Game over - restarting
+[1764518899] Game over - restarting
+[1764518900] Game over - restarting
+[1764518901] Game over - restarting
+[1764518902] Game over - restarting
+[1764518902] Stuck detection #1 - Loop: 1849 Games: 964 Episodes: 75240
+[1764518903] Game over - restarting
+[1764518905] Game over - restarting
+[1764518906] Game over - restarting
+[1764518907] Stuck detection #2 - Loop: 1940 Games: 967 Episodes: 75283
+[1764518907] Game over - restarting
+[1764518909] Game over - restarting
+[1764518910] Loop: 2000 Games: 969 Episodes: 75312 GameOver: NO Paused: NO AI: ON
+[1764518911] Game over - restarting
+[1764518915] Game over - restarting
+[1764518915] Stuck detection #1 - Loop: 2093 Games: 971 Episodes: 75358
+[1764518920] Stuck detection #2 - Loop: 2190 Games: 971 Episodes: 75406
+[1764518925] Stuck detection #3 - Loop: 2286 Games: 971 Episodes: 75454
+[1764518927] Game over - restarting
+[1764518930] Stuck detection #4 - Loop: 2381 Games: 972 Episodes: 75501
+[1764518930] FORCE UPDATE: Breaking potential deadlock
+[1764518934] Game over - restarting
+[1764518935] Stuck detection #1 - Loop: 2476 Games: 973 Episodes: 75547
+[1764518937] Game over - restarting
+[1764518940] Stuck detection #2 - Loop: 2571 Games: 974 Episodes: 75594
+[1764518941] Game over - restarting

@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
+#include <ctime>
+#include <iomanip>
 
 // Neural Network Implementation
 NeuralNetwork::NeuralNetwork() {
@@ -189,6 +191,14 @@ void NeuralNetwork::save(const std::string& filename) {
     std::ofstream file(filename);
     if (!file.is_open()) return;
     
+    // Write header with timestamp and filename
+    auto now = std::time(nullptr);
+    auto time_info = *std::localtime(&now);
+    file << "# Neural Network Model File\n";
+    file << "# Saved: " << std::put_time(&time_info, "%Y-%m-%d %H:%M:%S") << "\n";
+    file << "# Filename: " << filename << "\n";
+    file << "#\n";
+    
     // Save weights1
     for (const auto& row : weights1) {
         for (double w : row) {
@@ -221,6 +231,30 @@ void NeuralNetwork::save(const std::string& filename) {
 bool NeuralNetwork::load(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) return false;
+    
+    // Skip header lines (lines starting with #)
+    // This handles both old format (no header) and new format (with header)
+    std::string line;
+    while (std::getline(file, line)) {
+        // Skip empty lines and comment lines
+        if (line.empty() || (line.length() > 0 && line[0] == '#')) {
+            continue;
+        }
+        // Found first data line - need to parse it
+        // Use stringstream to parse the line we just read
+        std::istringstream iss(line);
+        double w;
+        // Try to read first weight from this line
+        if (iss >> w) {
+            // This is a data line, put it back by resetting file position
+            // Get current position
+            std::streampos pos = file.tellg();
+            // Calculate position of start of this line
+            pos -= static_cast<std::streamoff>(line.length() + 1); // +1 for newline
+            file.seekg(pos);
+            break;
+        }
+    }
     
     // Load weights1
     for (auto& row : weights1) {
@@ -911,7 +945,7 @@ void RLAgent::saveModel() {
 }
 
 void RLAgent::saveModelToFile(const std::string& filename) {
-    // Save network weights first
+    // Save network weights first (includes timestamp and filename header)
     q_network.save(filename);
     
     // Append training state metadata to the model file
@@ -919,6 +953,7 @@ void RLAgent::saveModelToFile(const std::string& filename) {
     if (file.is_open()) {
         // Add separator and metadata header
         file << "\n# Training State Metadata\n";
+        file << "FILENAME " << filename << "\n";
         file << "EPSILON " << epsilon << "\n";
         file << "EPSILON_MIN " << epsilon_min << "\n";
         file << "EPSILON_DECAY " << epsilon_decay << "\n";

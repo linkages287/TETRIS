@@ -70,7 +70,18 @@ class WeightVisualizer:
         
         try:
             with open(self.model_file, 'r') as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
+                all_lines = f.readlines()
+            
+            # Filter out comment lines (starting with #) and empty lines
+            lines = []
+            for line in all_lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    lines.append(stripped)
+            
+            if len(lines) < INPUT_SIZE + 1:
+                print(f"Error: Not enough data lines in file (expected at least {INPUT_SIZE + 1}, got {len(lines)})")
+                return False
             
             # Parse weights1 (29 rows, 64 columns each)
             self.weights1 = np.zeros((INPUT_SIZE, HIDDEN_SIZE))
