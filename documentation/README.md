@@ -14,7 +14,9 @@ This folder contains all documentation for the Tetris AI project.
 
 ## Technical Reports
 
-- **NEURAL_NETWORK_ARCHITECTURE_REPORT.md** - **NEW!** Spiegazione dettagliata dell'architettura della rete (neuroni per strato)
+- **MODEL_ANALYSIS_REPORT.md** - Comprehensive model analysis: weight saturation, training consistency, and recommendations
+- **MODEL_ANALYSIS_FIXES_APPLIED.md** - **NEW!** Documentation of all fixes applied based on model analysis recommendations
+- **NEURAL_NETWORK_ARCHITECTURE_REPORT.md** - Spiegazione dettagliata dell'architettura della rete (neuroni per strato)
 - **NETWORK_CONVERGENCE_REPORT.md** - How to detect when the network has converged
 - **MODEL_COHERENCE_REPORT.md** - Model file structure and validation report
 - **WEIGHT_SATURATION_REPORT.md** - Analysis of weight saturation issues

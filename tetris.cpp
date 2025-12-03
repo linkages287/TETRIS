@@ -18,6 +18,8 @@
 #include <sstream>
 #include <string>
 #include <iostream>
+#include <cstring>
+#include <deque>
 #include "rl_agent.h"
 #include "parameter_tuner.h"
 #include "game_classes.h"
@@ -440,10 +442,46 @@ int TetrisGame::getAggregateHeight(const std::vector<std::vector<int>>& sim_boar
 
 // AI classes moved to rl_agent.h and rl_agent.cpp
 
-void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, ParameterTuner* tuner = nullptr) {
+// Helper function to update string only if different (prevents flickering)
+static void updateStringIfChanged(int y, int x, const std::string& new_str, std::string& prev_str) {
+    if (new_str != prev_str) {
+        // Clear old string first if it was longer
+        if (prev_str.length() > new_str.length()) {
+            mvaddstr(y, x, std::string(prev_str.length(), ' ').c_str());
+        }
+        mvaddstr(y, x, new_str.c_str());
+        prev_str = new_str;
+    }
+}
+
+// Global static variables for screen state tracking (accessible from both drawBoard and main)
+// Note: Board, current piece, and next piece are always redrawn for smooth movement
+static int prev_score_global = -1;
+static int prev_lines_global = -1;
+static int prev_level_global = -1;
+static bool prev_ai_enabled_global = false;
+static bool prev_training_mode_global = false;
+static bool prev_game_over_global = false;
+static bool prev_paused_global = false;
+static std::chrono::steady_clock::time_point game_over_start_time;
+static bool game_over_timer_active = false;
+
+void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, ParameterTuner* tuner = nullptr, bool score_graph_visible = false, bool stats_visible = false) {
     int height, width;
     getmaxyx(win, height, width);
     (void)height;  // height not used, but required by getmaxyx macro
+    
+    // Static variables to store previous strings (prevents flickering)
+    static std::string prev_stats_str1 = "";
+    static std::string prev_stats_str2 = "";
+    static std::string prev_epsilon_str1 = "";
+    static std::string prev_epsilon_str2 = "";
+    static std::string prev_weight_stats = "";
+    static std::vector<std::string> prev_weight_lines;
+    static std::string prev_sat_str1 = "";
+    static std::string prev_sat_str2 = "";
+    static int prev_sat_color = -1;
+    static std::string prev_tuner_str = "";
     
     // Reset attributes to normal
     attrset(0);
@@ -452,24 +490,29 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
     int board_x = width / 2 - game.WIDTH / 2 - 1;
     int board_y = 2;
     
-    // Draw board border
-    mvaddch(board_y - 1, board_x - 1, '+');
-    for (int i = 0; i < game.WIDTH * 2; i++) {
-        addch('-');
+    // Draw board border (only once)
+    static bool border_drawn = false;
+    if (!border_drawn) {
+        mvaddch(board_y - 1, board_x - 1, '+');
+        for (int i = 0; i < game.WIDTH * 2; i++) {
+            addch('-');
+        }
+        addch('+');
+        
+        for (int y = 0; y < game.HEIGHT; y++) {
+            mvaddch(board_y + y, board_x - 1, '|');
+            mvaddch(board_y + y, board_x + game.WIDTH * 2, '|');
+        }
+        
+        mvaddch(board_y + game.HEIGHT, board_x - 1, '+');
+        for (int i = 0; i < game.WIDTH * 2; i++) {
+            addch('-');
+        }
+        addch('+');
+        border_drawn = true;
     }
-    addch('+');
     
-    for (int y = 0; y < game.HEIGHT; y++) {
-        mvaddch(board_y + y, board_x - 1, '|');
-        mvaddch(board_y + y, board_x + game.WIDTH * 2, '|');
-    }
-    
-    mvaddch(board_y + game.HEIGHT, board_x - 1, '+');
-    for (int i = 0; i < game.WIDTH * 2; i++) {
-        addch('-');
-    }
-    addch('+');
-    
+    // ALWAYS redraw game board section (for smooth piece movement)
     // Draw placed blocks
     for (int y = 0; y < game.HEIGHT; y++) {
         for (int x = 0; x < game.WIDTH; x++) {
@@ -477,13 +520,13 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
                 mvaddstr(board_y + y, board_x + x * 2, "[]");
                 mvchgat(board_y + y, board_x + x * 2, 2, A_NORMAL, game.board[y][x], NULL);
             } else {
-                // Clear empty spaces to prevent artifacts
+                // Clear empty spaces
                 mvaddstr(board_y + y, board_x + x * 2, "  ");
             }
         }
     }
     
-    // Draw current piece
+    // Draw current piece (always redraw for smooth movement)
     if (game.current_piece) {
         std::vector<Point> blocks = game.current_piece->getBlocks();
         for (const auto& block : blocks) {
@@ -498,11 +541,53 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         }
     }
     
-    // Draw next piece preview
+    // Draw next piece preview (always redraw for smooth display)
+    // Position next piece on left side if score graph is visible, otherwise on right side
+    static int prev_preview_x = -1;
+    static int prev_preview_y = -1;
+    static bool prev_score_graph_visible = false;
+    
+    int preview_x, preview_y;
+    if (score_graph_visible) {
+        // Place next piece on the left side (near score info) when graph is visible
+        preview_x = board_x - 15;
+        preview_y = board_y + 9;  // 3 lines down from previous position (was board_y + 6, now board_y + 9)
+    } else {
+        // Place next piece on the right side when graph is not visible
+        preview_x = board_x + game.WIDTH * 2 + 5;
+        preview_y = board_y + 2;
+    }
+    
+    // Clear old position if position changed (due to graph toggle)
+    if (prev_preview_x != -1 && prev_preview_y != -1 && 
+        (prev_preview_x != preview_x || prev_preview_y != preview_y || prev_score_graph_visible != score_graph_visible)) {
+        // Clear old "Next:" label
+        mvaddstr(prev_preview_y - 1, prev_preview_x, "     ");
+        // Clear old next piece area
+        for (int dy = 0; dy < 4; dy++) {
+            for (int dx = 0; dx < 4; dx++) {
+                mvaddstr(prev_preview_y + dy, prev_preview_x + dx * 2, "  ");
+            }
+        }
+    }
+    
+    // Update previous position
+    prev_preview_x = preview_x;
+    prev_preview_y = preview_y;
+    prev_score_graph_visible = score_graph_visible;
+    
+    // Always redraw "Next:" label (in case it was cleared)
+    mvaddstr(preview_y - 1, preview_x, "Next:");
+    
+    // Always clear and redraw next piece area
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            mvaddstr(preview_y + dy, preview_x + dx * 2, "  ");
+        }
+    }
+    
+    // Draw next piece if it exists
     if (game.next_piece) {
-        int preview_x = board_x + game.WIDTH * 2 + 5;
-        int preview_y = board_y + 2;
-        mvaddstr(preview_y - 1, preview_x, "Next:");
         int shape[4][4];
         game.next_piece->getShape(shape);
         for (int dy = 0; dy < 4; dy++) {
@@ -515,53 +600,104 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         }
     }
     
-    // Draw score and stats
+    // Draw score and stats (only update if changed)
     int info_x = board_x - 15;
     int info_y = board_y + 2;
-    char score_str[50];
-    snprintf(score_str, sizeof(score_str), "Score: %d", game.score);
-    mvaddstr(info_y, info_x, score_str);
-    snprintf(score_str, sizeof(score_str), "Lines: %d", game.lines_cleared);
-    mvaddstr(info_y + 1, info_x, score_str);
-    snprintf(score_str, sizeof(score_str), "Level: %d", game.level);
-    mvaddstr(info_y + 2, info_x, score_str);
-    if (game.ai_enabled) {
-        if (game.training_mode) {
-            mvaddstr(info_y + 3, info_x, "AI: TRAINING");
-            mvchgat(info_y + 3, info_x, 13, A_BOLD | A_REVERSE, 1, NULL);
-        } else {
-            mvaddstr(info_y + 3, info_x, "AI: ON");
-            mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
-        }
-    } else {
-        mvaddstr(info_y + 3, info_x, "AI: OFF");
+    
+    // Clear and redraw score field when it changes (to avoid overlapping text)
+    if (prev_score_global != game.score) {
+        char score_str[50];
+        snprintf(score_str, sizeof(score_str), "Score: %d", game.score);
+        // Clear enough space for long numbers (e.g., "Score: 999999")
+        mvaddstr(info_y, info_x, "Score:        ");
+        mvaddstr(info_y, info_x, score_str);
+        prev_score_global = game.score;
     }
     
-    // Draw controls
-    int controls_y = board_y + game.HEIGHT + 2;
-    mvaddstr(controls_y, board_x, "Controls:");
-    mvaddstr(controls_y + 1, board_x, "Left/Right: Move");
-    mvaddstr(controls_y + 2, board_x, "Up: Rotate");
-    mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
-    mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
-    mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
-    mvaddstr(controls_y + 6, board_x, "T: Training Mode");
-    mvaddstr(controls_y + 7, board_x, "P: Pause  Q: Quit");
+    if (prev_lines_global != game.lines_cleared) {
+        char lines_str[50];
+        snprintf(lines_str, sizeof(lines_str), "Lines: %d", game.lines_cleared);
+        mvaddstr(info_y + 1, info_x, lines_str);
+        prev_lines_global = game.lines_cleared;
+    }
     
-    // Draw training stats if in training mode
-    if (game.training_mode && agent != nullptr) {
+    if (prev_level_global != game.level) {
+        char level_str[50];
+        snprintf(level_str, sizeof(level_str), "Level: %d", game.level);
+        mvaddstr(info_y + 2, info_x, level_str);
+        prev_level_global = game.level;
+    }
+    
+    if (prev_ai_enabled_global != game.ai_enabled || prev_training_mode_global != game.training_mode) {
+        if (game.ai_enabled) {
+            if (game.training_mode) {
+                mvaddstr(info_y + 3, info_x, "AI: TRAINING");
+                mvchgat(info_y + 3, info_x, 13, A_BOLD | A_REVERSE, 1, NULL);
+            } else {
+                mvaddstr(info_y + 3, info_x, "AI: ON");
+                mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
+            }
+        } else {
+            mvaddstr(info_y + 3, info_x, "AI: OFF");
+        }
+        prev_ai_enabled_global = game.ai_enabled;
+        prev_training_mode_global = game.training_mode;
+    }
+    
+    // Draw controls (only once)
+    static bool controls_drawn = false;
+    int controls_y = board_y + game.HEIGHT + 2;
+    if (!controls_drawn) {
+        mvaddstr(controls_y, board_x, "Controls:");
+        mvaddstr(controls_y + 1, board_x, "Left/Right: Move");
+        mvaddstr(controls_y + 2, board_x, "Up: Rotate");
+        mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
+        mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
+        mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
+        mvaddstr(controls_y + 6, board_x, "T: Training Mode");
+        mvaddstr(controls_y + 7, board_x, "S: Score Graph  V: Stats");
+        mvaddstr(controls_y + 8, board_x, "P: Pause  Q: Quit");
+        controls_drawn = true;
+    }
+    
+    // Clear stats area if stats are hidden (to prevent leftover text)
+    static bool prev_stats_visible = false;
+    if (!stats_visible && prev_stats_visible) {
+        // Clear the stats area (from controls_y + 9 to bottom of screen)
+        int stats_y = controls_y + 9;
+        int height, width;
+        getmaxyx(win, height, width);
+        for (int y = stats_y; y < height - 1; y++) {
+            for (int x = board_x; x < board_x + 80; x++) {
+                if (x >= 0 && x < width && y >= 0 && y < height) {
+                    mvaddch(y, x, ' ');
+                }
+            }
+        }
+    }
+    prev_stats_visible = stats_visible;
+    
+    // Draw training stats if in training mode and stats are visible
+    if (game.training_mode && agent != nullptr && stats_visible) {
         int stats_y = controls_y + 9;
         char stats_str[250];
         const char* model_status = agent->model_loaded ? "[LOADED]" : "[NEW]";
         snprintf(stats_str, sizeof(stats_str), 
-                "Training: Games=%d Episodes=%d Best=%d Avg=%.0f Epsilon=%.3f Buffer=%zu %s", 
+                "Training: Games=%d Episodes=%d Best=%d Avg=%.0f", 
                 agent->total_games, agent->training_episodes, 
-                agent->best_score, agent->average_score, agent->epsilon, agent->replay_buffer.size(), model_status);
-        mvaddstr(stats_y, board_x, stats_str);
+                agent->best_score, agent->average_score);
+        updateStringIfChanged(stats_y, board_x, std::string(stats_str), prev_stats_str1);
+        
+        char stats_str2[200];
+        snprintf(stats_str2, sizeof(stats_str2),
+                "Epsilon=%.3f Buffer=%zu %s",
+                agent->epsilon, agent->replay_buffer.size(), model_status);
+        updateStringIfChanged(stats_y + 1, board_x, std::string(stats_str2), prev_stats_str2);
         
         // Display epsilon-score relationship tracking
-        int epsilon_track_y = stats_y + 3;
-        char epsilon_track_str[200];
+        int epsilon_track_y = stats_y + 2;
+        char epsilon_track_str1[200];
+        char epsilon_track_str2[200];
         double epsilon_change = agent->epsilon - agent->last_epsilon;
         const char* epsilon_trend = "";
         if (epsilon_change > 0.001) {
@@ -571,19 +707,102 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         } else {
             epsilon_trend = "→ (stable)";
         }
-        snprintf(epsilon_track_str, sizeof(epsilon_track_str),
-                "Epsilon-Score: Avg=%.0f Eps=%.3f %s | Inc=%d Dec=%d | Change=%.1f%%",
-                agent->average_score, agent->epsilon, epsilon_trend,
+        snprintf(epsilon_track_str1, sizeof(epsilon_track_str1),
+                "Epsilon-Score: Avg=%.0f Eps=%.3f %s",
+                agent->average_score, agent->epsilon, epsilon_trend);
+        snprintf(epsilon_track_str2, sizeof(epsilon_track_str2),
+                "Inc=%d Dec=%d | Change=%.1f%%",
                 agent->epsilon_increase_count, agent->epsilon_decrease_count,
                 agent->epsilon_change_reason);
-        mvaddstr(epsilon_track_y, board_x, epsilon_track_str);
+        updateStringIfChanged(epsilon_track_y, board_x, std::string(epsilon_track_str1), prev_epsilon_str1);
+        updateStringIfChanged(epsilon_track_y + 1, board_x, std::string(epsilon_track_str2), prev_epsilon_str2);
         
-        // Draw weight changes on next line
+        // Draw weight changes and saturation metrics after epsilon info
         if (agent->training_episodes > 0) {
-            int weight_y = stats_y + 1;
+            int weight_y = epsilon_track_y + 2;  // Start after epsilon info
             std::string weight_stats = agent->q_network.getWeightStatsString(
                 agent->training_episodes, agent->last_batch_error);
-            mvaddstr(weight_y, board_x, weight_stats.c_str());
+            
+            // Split weight stats on multiple lines if it contains newline
+            // Only update if different
+            if (weight_stats != prev_weight_stats) {
+                std::stringstream ss(weight_stats);
+                std::string line;
+                int current_y = weight_y;
+                size_t line_num = 0;
+                while (std::getline(ss, line, '\n')) {
+                    // Clear previous line if it was longer
+                    if (line_num < prev_weight_lines.size() && prev_weight_lines[line_num].length() > line.length()) {
+                        mvaddstr(current_y, board_x, std::string(prev_weight_lines[line_num].length(), ' ').c_str());
+                    }
+                    mvaddstr(current_y, board_x, line.c_str());
+                    if (line_num >= prev_weight_lines.size()) {
+                        prev_weight_lines.push_back(line);
+                    } else {
+                        prev_weight_lines[line_num] = line;
+                    }
+                    current_y++;
+                    line_num++;
+                }
+                // Clear any extra previous lines
+                while (line_num < prev_weight_lines.size()) {
+                    mvaddstr(weight_y + static_cast<int>(line_num), board_x, std::string(prev_weight_lines[line_num].length(), ' ').c_str());
+                    line_num++;
+                }
+                if (line_num < prev_weight_lines.size()) {
+                    prev_weight_lines.resize(line_num);
+                }
+                prev_weight_stats = weight_stats;
+            }
+            
+            // Calculate current_y for saturation display
+            int current_y = weight_y;
+            std::stringstream ss(weight_stats);
+            std::string line;
+            while (std::getline(ss, line, '\n')) {
+                current_y++;
+            }
+            
+            // Draw saturation warning if saturation is too high
+            NeuralNetwork::SaturationMetrics sat = agent->q_network.calculateSaturation();
+            int sat_y = current_y;
+            char sat_str1[200];
+            char sat_str2[200];
+            const char* sat_status = "";
+            int sat_color = 0;
+            
+            // Check if any layer has high saturation (> 50%)
+            double max_sat = std::max({sat.weights1_saturation, sat.bias1_saturation, 
+                                      sat.weights2_saturation, sat.bias2_saturation});
+            
+            if (max_sat > 80.0) {
+                sat_status = "⚠️ HIGH SATURATION!";
+                sat_color = 1;  // Red
+            } else if (max_sat > 50.0) {
+                sat_status = "⚠️ Medium Saturation";
+                sat_color = 3;  // Yellow/Magenta
+            } else {
+                sat_status = "✓ Low Saturation";
+                sat_color = 2;  // Green
+            }
+            
+            snprintf(sat_str1, sizeof(sat_str1),
+                "Saturation: W1=%.1f%% B1=%.1f%% W2=%.1f%% B2=%.1f%%",
+                sat.weights1_saturation, sat.bias1_saturation,
+                sat.weights2_saturation, sat.bias2_saturation);
+            snprintf(sat_str2, sizeof(sat_str2), "Status: %s", sat_status);
+            
+            std::string sat_str1_str(sat_str1);
+            std::string sat_str2_str(sat_str2);
+            
+            updateStringIfChanged(sat_y, board_x, sat_str1_str, prev_sat_str1);
+            updateStringIfChanged(sat_y + 1, board_x, sat_str2_str, prev_sat_str2);
+            
+            // Update color only if changed
+            if (sat_color != prev_sat_color) {
+                mvchgat(sat_y + 1, board_x, sat_str2_str.length(), A_BOLD, sat_color, NULL);
+                prev_sat_color = sat_color;
+            }
         }
         
         // Draw parameter tuning info
@@ -594,19 +813,59 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
                     "Tuner: LR=%.4f Gamma=%.3f EpsDec=%.4f EpsMin=%.3f Set=%d/%zu",
                     agent->learning_rate, agent->gamma, agent->epsilon_decay, 
                     agent->epsilon_min, tuner->current_param_set_index, tuner->parameter_sets.size());
-            mvaddstr(tuner_y, board_x, tuner_str);
+            updateStringIfChanged(tuner_y, board_x, std::string(tuner_str), prev_tuner_str);
         }
     }
     
-    // Draw game over or pause message
-    if (game.game_over) {
+    // Draw game over or pause message (positioned 1 line above "Controls:")
+    // Use the same controls_y that was calculated earlier
+    int msg_y = board_y + game.HEIGHT + 1;  // 1 line above Controls (controls_y is board_y + HEIGHT + 2)
+    int msg_x = board_x;  // Same X position as Controls
+    
+    // Always clear message area first (clear enough space)
+    mvaddstr(msg_y, msg_x, "                    ");  // Clear larger area
+    
+    // Handle game over with 200ms visibility timer (non-blocking)
+    if (game.game_over && !prev_game_over_global) {
+        // Game over just started - start timer
+        game_over_start_time = std::chrono::steady_clock::now();
+        game_over_timer_active = true;
+    }
+    
+    // Check if game over timer is still active (200ms duration)
+    bool show_game_over = false;
+    if (game.game_over && game_over_timer_active) {
+        auto current_time = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            current_time - game_over_start_time).count();
+        
+        if (elapsed < 200) {
+            // Still within 200ms window - show message
+            show_game_over = true;
+        } else {
+            // 200ms elapsed - hide message but keep timer active flag until game restarts
+            game_over_timer_active = false;
+        }
+    }
+    
+    // Always redraw message to ensure visibility
+    if (show_game_over) {
         const char* msg = "GAME OVER!";
-        mvaddstr(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 5, msg);
-        mvchgat(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 5, 10, A_BOLD, 1, NULL);
+        mvaddstr(msg_y, msg_x, msg);
+        mvchgat(msg_y, msg_x, strlen(msg), A_BOLD | A_REVERSE, 1, NULL);  // Bold + reverse for visibility
     } else if (game.paused) {
         const char* msg = "PAUSED";
-        mvaddstr(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 3, msg);
-        mvchgat(board_y + game.HEIGHT / 2, board_x + game.WIDTH - 3, 6, A_BOLD, 0, NULL);
+        mvaddstr(msg_y, msg_x, msg);
+        mvchgat(msg_y, msg_x, strlen(msg), A_BOLD | A_REVERSE, 0, NULL);  // Bold + reverse for visibility
+    }
+    
+    // Update previous state
+    prev_game_over_global = game.game_over;
+    prev_paused_global = game.paused;
+    
+    // Reset timer when game restarts (game_over goes from true to false)
+    if (!game.game_over && prev_game_over_global) {
+        game_over_timer_active = false;
     }
     
     // Reset attributes to normal after drawing
@@ -622,6 +881,167 @@ void initColors() {
     init_pair(5, COLOR_RED, COLOR_BLACK);       // Z piece
     init_pair(6, COLOR_BLUE, COLOR_BLACK);      // J piece
     init_pair(7, COLOR_WHITE, COLOR_BLACK);    // L piece
+}
+
+// Score history for graph
+std::deque<int> score_history;
+bool show_score_graph = false;
+bool show_stats = false;  // Toggle for showing/hiding training stats
+const int MAX_HISTORY = 200;  // Maximum scores to display in graph
+
+void drawScoreGraph(RLAgent* agent) {
+    if (!show_score_graph) return;
+    
+    // Show message if no data yet
+    if (score_history.empty()) {
+        int width;
+        int height_unused;
+        getmaxyx(stdscr, height_unused, width);
+        (void)height_unused;  // Suppress unused variable warning
+        int graph_x = width - 60;
+        int graph_y = 2;
+        int graph_width = 55;
+        int graph_height = 20;
+        
+        // Draw graph border even if empty
+        mvaddch(graph_y, graph_x, '+');
+        mvaddch(graph_y, graph_x + graph_width, '+');
+        mvaddch(graph_y + graph_height, graph_x, '+');
+        mvaddch(graph_y + graph_height, graph_x + graph_width, '+');
+        
+        for (int i = 1; i < graph_width; i++) {
+            mvaddch(graph_y, graph_x + i, '-');
+            mvaddch(graph_y + graph_height, graph_x + i, '-');
+        }
+        for (int i = 1; i < graph_height; i++) {
+            mvaddch(graph_y + i, graph_x, '|');
+            mvaddch(graph_y + i, graph_x + graph_width, '|');
+        }
+        
+        mvaddstr(graph_y, graph_x + 2, "Score History (Press S to toggle)");
+        mvaddstr(graph_y + graph_height / 2, graph_x + 15, "Waiting for data...");
+        return;
+    }
+    
+    int width;
+    int height;
+    getmaxyx(stdscr, height, width);
+    
+    // Graph dimensions
+    int graph_x = width - 60;  // Right side of screen
+    int graph_y = 2;
+    int graph_width = 55;
+    int graph_height = 20;
+    
+    // Clear entire graph area before redrawing (including border, labels, and stats below)
+    for (int y = graph_y - 1; y <= graph_y + graph_height + 3; y++) {
+        for (int x = graph_x - 15; x <= graph_x + graph_width + 1; x++) {
+            if (x >= 0 && x < width && y >= 0 && y < height) {
+                mvaddch(y, x, ' ');
+            }
+        }
+    }
+    
+    // Draw graph border
+    mvaddch(graph_y, graph_x, '+');
+    mvaddch(graph_y, graph_x + graph_width, '+');
+    mvaddch(graph_y + graph_height, graph_x, '+');
+    mvaddch(graph_y + graph_height, graph_x + graph_width, '+');
+    
+    for (int i = 1; i < graph_width; i++) {
+        mvaddch(graph_y, graph_x + i, '-');
+        mvaddch(graph_y + graph_height, graph_x + i, '-');
+    }
+    for (int i = 1; i < graph_height; i++) {
+        mvaddch(graph_y + i, graph_x, '|');
+        mvaddch(graph_y + i, graph_x + graph_width, '|');
+    }
+    
+    // Title
+    mvaddstr(graph_y, graph_x + 2, "Score History (Press S to toggle)");
+    
+    if (score_history.size() < 2) {
+        mvaddstr(graph_y + graph_height / 2, graph_x + 15, "Not enough data");
+        return;
+    }
+    
+    // Find min/max for scaling
+    int min_score = *std::min_element(score_history.begin(), score_history.end());
+    int max_score = *std::max_element(score_history.begin(), score_history.end());
+    
+    // Add some padding
+    int range = max_score - min_score;
+    if (range == 0) range = 1;
+    min_score = std::max(0, min_score - range / 10);
+    max_score = max_score + range / 10;
+    range = max_score - min_score;
+    
+    // Draw Y-axis labels
+    char label[20];
+    snprintf(label, sizeof(label), "%d", max_score);
+    mvaddstr(graph_y + 1, graph_x - strlen(label) - 1, label);
+    snprintf(label, sizeof(label), "%d", min_score);
+    mvaddstr(graph_y + graph_height - 1, graph_x - strlen(label) - 1, label);
+    snprintf(label, sizeof(label), "%d", (min_score + max_score) / 2);
+    mvaddstr(graph_y + graph_height / 2, graph_x - strlen(label) - 1, label);
+    
+    // Draw graph points and lines
+    int num_points = std::min((int)score_history.size(), graph_width - 2);
+    int start_idx = std::max(0, (int)score_history.size() - num_points);
+    
+    std::vector<int> graph_y_positions;
+    for (int i = 0; i < num_points; i++) {
+        int score = score_history[start_idx + i];
+        int y_pos = graph_y + graph_height - 1 - 
+                   ((score - min_score) * (graph_height - 2) / range);
+        y_pos = std::max(graph_y + 1, std::min(graph_y + graph_height - 1, y_pos));
+        graph_y_positions.push_back(y_pos);
+    }
+    
+    // Draw lines connecting points
+    for (int i = 0; i < num_points - 1; i++) {
+        int x1 = graph_x + 1 + i;
+        int y1 = graph_y_positions[i];
+        int x2 = graph_x + 1 + i + 1;
+        int y2 = graph_y_positions[i + 1];
+        
+        // Draw line using Bresenham-like algorithm
+        int dx = abs(x2 - x1);
+        int dy = abs(y2 - y1);
+        int sx = (x1 < x2) ? 1 : -1;
+        int sy = (y1 < y2) ? 1 : -1;
+        int err = dx - dy;
+        
+        int x = x1, y = y1;
+        while (true) {
+            if (x >= graph_x + 1 && x < graph_x + graph_width && 
+                y >= graph_y + 1 && y < graph_y + graph_height) {
+                mvaddch(y, x, '*');
+            }
+            
+            if (x == x2 && y == y2) break;
+            
+            int e2 = 2 * err;
+            if (e2 > -dy) {
+                err -= dy;
+                x += sx;
+            }
+            if (e2 < dx) {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+    
+    // Draw current stats
+    int stats_y = graph_y + graph_height + 1;
+    char stats[100];
+    snprintf(stats, sizeof(stats), "Games: %d | Best: %d | Avg: %.0f", 
+             agent->total_games, agent->best_score, agent->average_score);
+    mvaddstr(stats_y, graph_x, stats);
+    
+    // Draw X-axis label
+    mvaddstr(graph_y + graph_height + 2, graph_x + graph_width / 2 - 5, "Time (games)");
 }
 
 int main(int argc, char* argv[]) {
@@ -657,6 +1077,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  A                 - Toggle AI\n";
             std::cout << "  T                 - Toggle training mode\n";
             std::cout << "  P                 - Pause/Unpause\n";
+            std::cout << "  S                 - Toggle score graph\n";
             std::cout << "  Q                 - Quit\n";
             return 0;
         }
@@ -735,8 +1156,7 @@ int main(int argc, char* argv[]) {
             last_debug_time = current_debug_time;
             stuck_detection_count = 0;
         }
-        // Clear screen and reset attributes
-        erase();
+        // Don't erase screen - only update what changes
         attrset(0);  // Reset all attributes to normal
         
         // Handle input
@@ -753,6 +1173,10 @@ int main(int argc, char* argv[]) {
             if (game.training_mode) {
                 game.ai_enabled = true;  // Auto-enable AI in training mode
             }
+        } else if (key == 's' || key == 'S') {
+            show_score_graph = !show_score_graph;
+        } else if (key == 'v' || key == 'V') {
+            show_stats = !show_stats;
         } else if (!game.game_over && !game.paused && !game.ai_enabled) {
             if (key == KEY_LEFT) {
                 game.movePiece(-1, 0);
@@ -799,43 +1223,43 @@ int main(int argc, char* argv[]) {
                 
                 // Collect experience for training
                 if (game.training_mode && last_state.size() > 0) {
-                    // Calculate reward (simplified and clearer reward shaping)
+                    // Calculate reward (improved reward shaping for better learning)
                     double reward = 0.0;
                     int score_diff = game.score - game.last_score;
                     int lines_diff = game.lines_cleared - game.last_lines;
                     
-                    // Primary rewards (most important) - more generous
-                    reward += lines_diff * 5.0;       // Increased reward for clearing lines (main objective)
-                    reward += score_diff * 0.1;        // Increased reward for score increases
+                    // Primary rewards (most important) - significantly increased
+                    reward += lines_diff * 20.0;      // Increased from 5.0 (4x) - line clearing is main objective
+                    reward += score_diff * 0.5;        // Increased from 0.1 (5x) - score increases are important
                     
-                    // Survival bonus (encourage staying alive) - more significant
+                    // Survival bonus (encourage staying alive) - increased
                     if (!game.game_over) {
-                        reward += 1.0;  // Increased survival bonus
+                        reward += 2.0;  // Increased from 1.0 (2x) - survival is crucial
                     }
                     
-                    // Game over penalty
+                    // Game over penalty - significantly increased
                     if (game.game_over) {
-                        reward -= 50.0;  // Increased penalty for losing (more significant)
+                        reward -= 200.0;  // Increased from 50.0 (4x) - game over is very bad
                     }
                     
-                    // State quality penalties (prevent bad states) - less harsh
+                    // State quality penalties (prevent bad states) - increased for better guidance
                     int aggregate_height = game.getAggregateHeight(game.board);
-                    reward -= aggregate_height * 0.05;  // Reduced penalty for high stacks
+                    reward -= aggregate_height * 0.2;  // Increased from 0.05 (4x) - high stacks are dangerous
                     
                     int holes = game.countHoles(game.board);
-                    reward -= holes * 0.3;  // Reduced penalty for creating holes
+                    reward -= holes * 1.5;  // Increased from 0.3 (5x) - holes are very bad
                     
                     int bumpiness = game.calculateBumpiness(game.board);
-                    reward -= bumpiness * 0.02;  // Reduced penalty for uneven surface
+                    reward -= bumpiness * 0.1;  // Increased from 0.02 (5x) - uneven surface is problematic
                     
-                    // Bonus for keeping board low (encourage good play)
+                    // Bonus for keeping board low (encourage good play) - increased
                     int max_height = 0;
                     for (int x = 0; x < game.WIDTH; x++) {
                         int h = game.getColumnHeight(x, game.board);
                         if (h > max_height) max_height = h;
                     }
                     if (max_height < 10) {
-                        reward += 0.5;  // Bonus for keeping board low
+                        reward += 2.0;  // Increased from 0.5 (4x) - low board is good
                     }
                     
                     // Store experience
@@ -939,6 +1363,12 @@ int main(int argc, char* argv[]) {
                 agent.recent_scores.pop_front();
             }
             
+            // Track scores for graph display
+            score_history.push_back(game.score);
+            if (score_history.size() > MAX_HISTORY) {
+                score_history.pop_front();
+            }
+            
             // Track best score improvement
             if (game.score > agent.best_score) {
                 agent.games_since_best_improvement = 0;
@@ -975,8 +1405,12 @@ int main(int argc, char* argv[]) {
             // Small delay to show game over briefly and allow screen refresh
             napms(100);
             
-            // Force screen refresh after restart to prevent black screen
-            erase();
+            // Reset previous states after restart
+            prev_score_global = -1;
+            prev_lines_global = -1;
+            prev_level_global = -1;
+            prev_game_over_global = false;
+            prev_paused_global = false;
             attrset(0);  // Reset attributes
         }
         
@@ -985,8 +1419,32 @@ int main(int argc, char* argv[]) {
             game.update();
         }
         
-        // Draw everything
-        drawBoard(stdscr, game, &agent, &tuner);
+        // Draw or clear score graph based on toggle state (draw BEFORE board to ensure visibility)
+        static bool prev_show_score_graph = false;
+        if (show_score_graph) {
+            drawScoreGraph(&agent);
+        } else if (prev_show_score_graph && !show_score_graph) {
+            // Graph was just toggled off - clear the graph area
+            int width, height;
+            getmaxyx(stdscr, height, width);
+            int graph_x = width - 60;
+            int graph_y = 2;
+            int graph_width = 55;
+            int graph_height = 20;
+            
+            // Clear the entire graph area
+            for (int y = graph_y; y <= graph_y + graph_height; y++) {
+                for (int x = graph_x - 10; x <= graph_x + graph_width; x++) {
+                    if (x >= 0 && x < width && y >= 0 && y < height) {
+                        mvaddch(y, x, ' ');
+                    }
+                }
+            }
+        }
+        prev_show_score_graph = show_score_graph;
+        
+        // Draw everything (after graph to ensure graph stays visible)
+        drawBoard(stdscr, game, &agent, &tuner, show_score_graph, show_stats);
         
         // Refresh screen and ensure cursor is hidden
         refresh();

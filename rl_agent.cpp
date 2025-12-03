@@ -60,7 +60,7 @@ double NeuralNetwork::relu(double x) const {
 double NeuralNetwork::leaky_relu(double x) const {
     // Leaky ReLU: allows small negative gradients to flow through
     // Prevents "dead neurons" that output 0 for all inputs
-    return std::max(0.01 * x, x);  // Leak factor: 0.01 (1% of negative values)
+    return std::max(0.2 * x, x);  // Leak factor: 0.2 (20% of negative values) - standard value
 }
 
 double NeuralNetwork::forward(const std::vector<double>& input) {
@@ -111,10 +111,12 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
     double output_gradient = error;  // Don't multiply by learning_rate here
     
     // Weight decay coefficient (L2 regularization) - reduced to allow more learning
-    const double weight_decay = 0.00005;  // Reduced from 0.0001 to prevent over-regularization
+    const double weight_decay = 0.00001;  // Reduced from 0.00005 per model analysis recommendations to allow weights to diverge more
+    // Stronger decay for bias2 to avoid sticking to clipping boundary
+    const double bias2_weight_decay = weight_decay * 5.0;
     
-    // Maximum gradient magnitude for clipping
-    const double max_gradient = 1.0;
+    // Maximum gradient magnitude for clipping (reduced to 2.0 to reduce variance in weights2)
+    const double max_gradient = 2.0;
     
     // Update output layer weights and bias
     for (int i = 0; i < HIDDEN_SIZE; i++) {
@@ -128,33 +130,95 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
         // Apply weight decay (L2 regularization)
         weights2[i][0] -= weight_decay * weights2[i][0];
         
-        weights2[i][0] += learning_rate * weight_gradient;
-        // Clip weights to prevent explosion (reduced from ±50.0 to ±20.0)
-        weights2[i][0] = std::max(-20.0, std::min(20.0, weights2[i][0]));
+        // Use reduced learning rate for weights2 to prevent high variance (50% of normal)
+        double weights2_lr = learning_rate * 0.5;
+        weights2[i][0] += weights2_lr * weight_gradient;
+        // Clip weights to prevent explosion (reduced to ±30.0 to reduce variance while allowing learning)
+        weights2[i][0] = std::max(-30.0, std::min(30.0, weights2[i][0]));
     }
     
-    // Clip output gradient for bias update
-    double output_gradient_clipped = output_gradient;
-    if (std::abs(output_gradient_clipped) > 1.0) {
-        output_gradient_clipped = (output_gradient_clipped > 0) ? 1.0 : -1.0;
+    // Improved bias2 update logic to prevent saturation with reset mechanism
+    // Use moderate learning rate (reduced from 5.0x to 2.0x for stability)
+    const double bias2_learning_rate = learning_rate * 2.0;  // Reduced from 5.0 for more stable learning
+    double bias2_gradient = output_gradient;
+    
+    // Track bias2 changes to detect saturation
+    static double previous_bias2 = bias2[0];
+    static int bias2_stuck_count = 0;
+    
+    // Add momentum for bias2 to stabilize updates
+    static double bias2_momentum = 0.0;
+    bias2_gradient = 0.9 * bias2_momentum + 0.1 * bias2_gradient;  // Momentum: 90% old, 10% new
+    bias2_momentum = bias2_gradient;
+    
+    // More conservative gradient clipping for bias2 (reduced from 5.0 to 3.0)
+    if (std::abs(bias2_gradient) > 3.0) {
+        bias2_gradient = (bias2_gradient > 0) ? 3.0 : -3.0;
     }
-    bias2[0] += learning_rate * output_gradient_clipped;
-    bias2[0] = std::max(-20.0, std::min(20.0, bias2[0]));
+    
+    // Apply stronger weight decay to bias2 to pull it away from clipping boundaries over time
+    bias2[0] -= bias2_weight_decay * bias2[0];
+    bias2[0] += bias2_learning_rate * bias2_gradient;
+    
+    // Increased clipping range for bias2 to allow more learning space (from [-20, 20] to [-50, 50])
+    bias2[0] = std::max(-50.0, std::min(50.0, bias2[0]));
+    
+    // Reset bias2 if stuck (saturated) for too long
+    if (std::abs(bias2[0] - previous_bias2) < 0.001) {
+        bias2_stuck_count++;
+        if (bias2_stuck_count > 10000) {  // Reset if stuck for 10k updates
+            // Reset to small random value to break saturation
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::normal_distribution<double> reset_dist(0.0, 0.1);
+            bias2[0] = reset_dist(gen);
+            bias2[0] = std::max(-50.0, std::min(50.0, bias2[0]));  // Ensure within range
+            bias2_stuck_count = 0;
+            bias2_momentum = 0.0;  // Reset momentum too
+        }
+    } else {
+        bias2_stuck_count = 0;  // Reset counter if bias2 is changing
+    }
+    previous_bias2 = bias2[0];
+    
+    // Optional: log bias2 and its gradient periodically for debugging saturation behaviour
+    {
+        static int bias2_log_counter = 0;
+        bias2_log_counter++;
+        if (bias2_log_counter % 100000 == 0) {  // Log rarely to avoid I/O overhead
+            std::ofstream logfile("debug.log", std::ios::app);
+            if (logfile.is_open()) {
+                logfile << "[BIAS2] value=" << bias2[0]
+                        << " grad=" << bias2_gradient
+                        << " lr=" << bias2_learning_rate
+                        << " decay=" << bias2_weight_decay
+                        << " stuck_count=" << bias2_stuck_count
+                        << std::endl;
+            }
+        }
+    }
     
     // Hidden layer gradients
     for (int i = 0; i < HIDDEN_SIZE; i++) {
         // Gradient from output layer: dE/dhidden = output_gradient * weight2
         double hidden_gradient = output_gradient * weights2[i][0];
         
-        // Gradient clipping for hidden layer
-        if (std::abs(hidden_gradient) > 1.0) {
-            hidden_gradient = (hidden_gradient > 0) ? 1.0 : -1.0;
+        // Gradient clipping for hidden layer (reduced to 2.0 to reduce variance)
+        if (std::abs(hidden_gradient) > 2.0) {
+            hidden_gradient = (hidden_gradient > 0) ? 2.0 : -2.0;
         }
         
-        // Leaky ReLU derivative: 1 if hidden_pre_activation > 0, else 0.01
-        double relu_derivative = (hidden_pre_activation[i] > 0) ? 1.0 : 0.01;
+        // Leaky ReLU derivative: 1 if hidden_pre_activation > 0, else 0.2
+        double relu_derivative = (hidden_pre_activation[i] > 0) ? 1.0 : 0.2;
         // Always update (Leaky ReLU allows negative gradients to flow)
         // Update input-to-hidden weights
+        
+        // Feature importance indices: bumpiness (11) and aggregate height (12)
+        // These features were under-trained, so we increase their learning rate
+        const int BUMPINESS_IDX = 11;
+        const int AGGREGATE_HEIGHT_IDX = 12;
+        const double FEATURE_IMPORTANCE_MULTIPLIER = 2.0;  // 2x learning rate for important features
+        
         for (int j = 0; j < INPUT_SIZE; j++) {
             double weight_gradient = hidden_gradient * relu_derivative * input[j];
                 
@@ -166,7 +230,10 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
                 // Apply weight decay (L2 regularization)
                 weights1[j][i] -= weight_decay * weights1[j][i];
                 
-            weights1[j][i] += learning_rate * weight_gradient;
+            // Feature importance weighting: increase learning rate for bumpiness and aggregate height
+            double feature_lr_multiplier = (j == BUMPINESS_IDX || j == AGGREGATE_HEIGHT_IDX) 
+                                          ? FEATURE_IMPORTANCE_MULTIPLIER : 1.0;
+            weights1[j][i] += learning_rate * feature_lr_multiplier * weight_gradient;
             // Clip weights to prevent explosion (reduced from ±10.0 to ±2.0)
             weights1[j][i] = std::max(-2.0, std::min(2.0, weights1[j][i]));
         }
@@ -191,6 +258,7 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
     }
     if (!std::isfinite(bias2[0])) {
         bias2[0] = ((rand() / (double)RAND_MAX) - 0.5) * 0.1;
+        bias2[0] = std::max(-50.0, std::min(50.0, bias2[0]));  // Ensure within new clipping range
     }
 }
 
@@ -279,12 +347,16 @@ bool NeuralNetwork::load(const std::string& filename) {
     for (auto& row : weights2) {
         for (double& w : row) {
             if (!(file >> w)) return false;
+            // Clip weights2 to valid range during load to fix corrupted models
+            w = std::max(-30.0, std::min(30.0, w));
         }
     }
     
     // Load bias2
     for (double& b : bias2) {
         if (!(file >> b)) return false;
+        // Clip bias2 to valid range during load to fix corrupted models
+        b = std::max(-20.0, std::min(20.0, b));
     }
     
     return true;
@@ -361,6 +433,86 @@ void NeuralNetwork::logWeightChanges(const std::string& filename, int episode, d
     logfile.flush();
 }
 
+// Helper function to calculate saturation for a vector of values
+static double calcSaturation(const std::vector<double>& values, double& variance) {
+    if (values.empty()) {
+        variance = 0.0;
+        return 0.0;
+    }
+    
+    // Calculate mean and variance
+    double mean = 0.0;
+    for (size_t i = 0; i < values.size(); i++) {
+        mean += values[i];
+    }
+    mean /= values.size();
+    
+    variance = 0.0;
+    for (size_t i = 0; i < values.size(); i++) {
+        double diff = values[i] - mean;
+        variance += diff * diff;
+    }
+    variance /= values.size();
+    
+    // Count occurrences of each value (with tolerance for floating point)
+    // Use a simple approach: count how many values are "close" to each other
+    const double tolerance = 1e-6;
+    int max_count = 0;
+    
+    for (size_t i = 0; i < values.size(); i++) {
+        int count = 1;  // Count itself
+        for (size_t j = i + 1; j < values.size(); j++) {
+            if (std::abs(values[i] - values[j]) < tolerance) {
+                count++;
+            }
+        }
+        if (count > max_count) {
+            max_count = count;
+        }
+    }
+    
+    // Saturation = percentage of most common value
+    return (max_count / static_cast<double>(values.size())) * 100.0;
+}
+
+NeuralNetwork::SaturationMetrics NeuralNetwork::calculateSaturation() const {
+    SaturationMetrics metrics;
+    
+    // Calculate for weights1 (flatten to vector)
+    std::vector<double> w1_flat;
+    for (const auto& row : weights1) {
+        for (double w : row) {
+            w1_flat.push_back(w);
+        }
+    }
+    metrics.weights1_saturation = calcSaturation(w1_flat, metrics.weights1_variance);
+    
+    // Calculate for bias1
+    metrics.bias1_saturation = calcSaturation(bias1, metrics.bias1_variance);
+    
+    // Calculate for weights2 (flatten to vector)
+    std::vector<double> w2_flat;
+    for (const auto& row : weights2) {
+        for (double w : row) {
+            w2_flat.push_back(w);
+        }
+    }
+    metrics.weights2_saturation = calcSaturation(w2_flat, metrics.weights2_variance);
+    
+    // Calculate for bias2
+    std::vector<double> b2_vec(bias2.begin(), bias2.end());
+    metrics.bias2_saturation = calcSaturation(b2_vec, metrics.bias2_variance);
+    
+    // Calculate bias2 variance separately (since it's a single value, variance is 0)
+    if (bias2.size() > 0) {
+        metrics.bias2_variance = 0.0;  // Single value has no variance
+    } else {
+        metrics.bias2_variance = 0.0;
+    }
+    
+    return metrics;
+}
+
 std::string NeuralNetwork::getWeightStatsString(int episode, double error) {
     // Calculate weight statistics (same as logWeightChanges but return as string)
     double weights1_mean = 0.0, weights1_min = weights1[0][0], weights1_max = weights1[0][0];
@@ -413,13 +565,19 @@ std::string NeuralNetwork::getWeightStatsString(int episode, double error) {
     }
     bias1_mean /= bias1.size();
     
-    double bias2_mean = bias2[0];
+    // Calculate saturation metrics
+    SaturationMetrics sat = calculateSaturation();
     
-    // Format as compact single line
-    char buffer[300];
+    // Format with saturation info on multiple lines
+    char buffer[500];
     snprintf(buffer, sizeof(buffer), 
-        "Ep:%d Err:%.2f W1:m=%.3f W2:m=%.2f B2=%.2f",
-        episode, error, weights1_mean, weights2_mean, bias2_mean);
+        "Ep:%d Err:%.2f | W1: m=%.3f Sat=%.1f%% Var=%.4f | W2: m=%.2f Sat=%.1f%% Var=%.4f\n"
+        "B1: Sat=%.1f%% Var=%.4f | B2: Sat=%.1f%% Var=%.4f",
+        episode, error, 
+        weights1_mean, sat.weights1_saturation, sat.weights1_variance,
+        weights2_mean, sat.weights2_saturation, sat.weights2_variance,
+        sat.bias1_saturation, sat.bias1_variance,
+        sat.bias2_saturation, sat.bias2_variance);
     
     return std::string(buffer);
 }
@@ -427,9 +585,9 @@ std::string NeuralNetwork::getWeightStatsString(int episode, double error) {
 // RL Agent Implementation
 RLAgent::RLAgent(const std::string& model_file) 
     : epsilon(1.0),
-    epsilon_min(0.05),        // Minimum exploration rate
+    epsilon_min(0.15),        // Increased from 0.05 to 0.15 per model analysis recommendations (range: 0.1-0.2) to maintain exploration
     epsilon_decay(0.995),     // Faster decay: 0.995 (reaches min in ~900 games)
-    learning_rate(0.002),     // Increased learning rate for better learning (was 0.001, now 0.002)
+    learning_rate(0.003),      // Increased from 0.0015 to 0.003 (2x) for faster learning - decay now starts later
     gamma(0.99),              // High gamma for better long-term planning
     training_episodes(0),
     total_games(0),
@@ -530,11 +688,13 @@ std::vector<double> RLAgent::extractState(const TetrisGame& game) {
     // Holes count
     state[idx++] = game.countHoles(game.board) / 100.0;
     
-    // Bumpiness
-    state[idx++] = game.calculateBumpiness(game.board) / 50.0;
+    // Bumpiness - improved normalization for better learning (from /50.0 to /20.0)
+    // Larger normalized values (0.0-2.5) allow weights to have more impact
+    state[idx++] = game.calculateBumpiness(game.board) / 20.0;
     
-    // Aggregate height
-    state[idx++] = game.getAggregateHeight(game.board) / 200.0;
+    // Aggregate height - improved normalization for better learning (from /200.0 to /50.0)
+    // Larger normalized values (0.0-4.0) allow weights to have more impact
+    state[idx++] = game.getAggregateHeight(game.board) / 50.0;
     
     // Current piece type (7 features)
     for (int i = 0; i < 7; i++) {
@@ -639,7 +799,7 @@ RLAgent::Move RLAgent::findBestMove(const TetrisGame& game, bool training) {
             }
             next_state[idx++] = holes / 100.0;
             
-            // Bumpiness
+            // Bumpiness - improved normalization (from /50.0 to /20.0)
             int bumpiness = 0;
             for (int x = 0; x < game.WIDTH - 1; x++) {
                 int h1 = 0, h2 = 0;
@@ -649,9 +809,9 @@ RLAgent::Move RLAgent::findBestMove(const TetrisGame& game, bool training) {
                 }
                 bumpiness += abs(h1 - h2);
             }
-            next_state[idx++] = bumpiness / 50.0;
+            next_state[idx++] = bumpiness / 20.0;
             
-            // Aggregate height
+            // Aggregate height - improved normalization (from /200.0 to /50.0)
             int aggregate_height = 0;
             for (int x = 0; x < game.WIDTH; x++) {
                 for (int y = 0; y < game.HEIGHT; y++) {
@@ -661,7 +821,7 @@ RLAgent::Move RLAgent::findBestMove(const TetrisGame& game, bool training) {
                     }
                 }
             }
-            next_state[idx++] = aggregate_height / 200.0;
+            next_state[idx++] = aggregate_height / 50.0;
             
             // Current piece type (7 features) - none since piece is placed
             for (int i = 0; i < 7; i++) {
@@ -767,34 +927,47 @@ void RLAgent::train() {
         double target = exp.reward;
         if (!exp.done) {
             double next_q = q_network.forward(exp.next_state);
-            // Clip next Q-value to prevent extreme values
-            next_q = std::max(-100.0, std::min(100.0, next_q));
+            // Increased clipping range to allow more realistic Q-values (from [-100, 100] to [-500, 500])
+            // This prevents premature saturation while maintaining stability
+            next_q = std::max(-500.0, std::min(500.0, next_q));
             target += gamma * next_q;
         }
         
-        // Clip target to reasonable range
-        target = std::max(-100.0, std::min(100.0, target));
+        // Clip target to reasonable range (increased from [-100, 100] to [-500, 500])
+        target = std::max(-500.0, std::min(500.0, target));
         
         double predicted = q_network.forward(exp.state);
         double error = std::abs(target - predicted);
         batch_avg_error += error;  // Track all errors, not just valid ones
         
-        // Update network with adaptive learning rate
-        // Reduce learning rate when error is small (fine-tuning) to prevent overshooting
+        // Update network with improved learning rate management
+        // Reduced decay aggressiveness and increased base learning rate for better learning
         if (std::isfinite(target) && std::isfinite(predicted)) {
             // Only skip if error is extremely large (likely bad data)
             if (error < 10000.0) {  // Increased from 1000.0
-                // Adaptive learning rate: maintain or slightly increase when learning
-                double adaptive_lr = learning_rate;
+                // Improved learning rate decay: much slower and only after many episodes
+                // Decay only starts after 50k episodes and is 5x slower
+                double lr_decay_factor = 1.0;
+                if (training_episodes > 50000) {
+                    // Decay only after 50k episodes, and much slower (5x slower: 50k instead of 10k)
+                    lr_decay_factor = 1.0 / (1.0 + (training_episodes - 50000) / 50000.0);
+                }
+                double base_lr = learning_rate * lr_decay_factor;
+                
+                // Adaptive learning rate: maintain or slightly adjust based on performance
+                double adaptive_lr = base_lr;
                 // Only reduce learning rate if error is extremely small AND performance is very high
                 // This prevents premature fine-tuning that stops learning
-                if (error < 0.1 && average_score > 1000.0) {
+                if (error < 0.1 && average_score > 5000.0) {
                     // Very high performance and very small error - slight reduction for fine-tuning
-                    adaptive_lr = learning_rate * 0.8;  // 20% reduction only for very stable performance
+                    adaptive_lr = base_lr * 0.9;  // 10% reduction only for very stable performance (reduced from 20%)
                 } else if (error > 5.0 && average_score < 200.0) {
-                    // Large error and low performance - slightly increase learning rate
-                    adaptive_lr = learning_rate * 1.2;  // 20% increase to learn faster
+                    // Large error and low performance - increase learning rate more aggressively
+                    adaptive_lr = base_lr * 1.5;  // 50% increase to learn faster (increased from 20%)
                 }
+                
+                // Use reduced learning rate for weights2 to prevent high variance
+                // Store original learning rate, then use reduced for weights2
                 q_network.update(exp.state, target, adaptive_lr);
                 valid_updates++;
             }

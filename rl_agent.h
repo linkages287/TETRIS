@@ -40,6 +40,19 @@ public:
     bool load(const std::string& filename);
     void logWeightChanges(const std::string& filename, int episode, double error);
     std::string getWeightStatsString(int episode, double error);  // Get stats as string for display
+    
+    // Saturation monitoring
+    struct SaturationMetrics {
+        double weights1_saturation;  // Percentage of identical values in weights1
+        double bias1_saturation;     // Percentage of identical values in bias1
+        double weights2_saturation;  // Percentage of identical values in weights2
+        double bias2_saturation;     // Percentage of identical values in bias2
+        double weights1_variance;    // Variance of weights1
+        double bias1_variance;      // Variance of bias1
+        double weights2_variance;   // Variance of weights2
+        double bias2_variance;      // Variance of bias2
+    };
+    SaturationMetrics calculateSaturation() const;  // Calculate saturation metrics for all layers
 };
 
 // Reinforcement Learning Agent
