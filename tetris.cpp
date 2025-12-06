@@ -707,21 +707,48 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         } else {
             epsilon_trend = "→ (stable)";
         }
+        // Calculate adaptive decay rate based on score
+        double decay_rate = agent->epsilon_decay;
+        if (agent->average_score < 100.0) {
+            decay_rate = 0.99995;  // Very slow
+        } else if (agent->average_score < 200.0) {
+            decay_rate = 0.9999;  // Slow
+        } else if (agent->average_score < 500.0) {
+            decay_rate = 0.99975;  // Moderate
+        }
+        
         snprintf(epsilon_track_str1, sizeof(epsilon_track_str1),
-                "Epsilon-Score: Avg=%.0f Eps=%.3f %s",
-                agent->average_score, agent->epsilon, epsilon_trend);
+                "Epsilon-Score: Avg=%.0f Eps=%.3f %s | Decay=%.5f",
+                agent->average_score, agent->epsilon, epsilon_trend, decay_rate);
+        
+        // Show epsilon at milestones
+        char milestone_str[200] = "";
+        if (agent->epsilon_at_score_100 >= 0) {
+            snprintf(milestone_str, sizeof(milestone_str), 
+                    "Eps@100=%.3f", agent->epsilon_at_score_100);
+        }
+        if (agent->epsilon_at_score_500 >= 0) {
+            char temp[100];
+            snprintf(temp, sizeof(temp), " Eps@500=%.3f", agent->epsilon_at_score_500);
+            strncat(milestone_str, temp, sizeof(milestone_str) - strlen(milestone_str) - 1);
+        }
+        if (agent->epsilon_at_score_1000 >= 0) {
+            char temp[100];
+            snprintf(temp, sizeof(temp), " Eps@1000=%.3f", agent->epsilon_at_score_1000);
+            strncat(milestone_str, temp, sizeof(milestone_str) - strlen(milestone_str) - 1);
+        }
+        
         snprintf(epsilon_track_str2, sizeof(epsilon_track_str2),
-                "Inc=%d Dec=%d | Change=%.1f%%",
-                agent->epsilon_increase_count, agent->epsilon_decrease_count,
-                agent->epsilon_change_reason);
+                "%s", milestone_str[0] ? milestone_str : "No milestones reached");
         updateStringIfChanged(epsilon_track_y, board_x, std::string(epsilon_track_str1), prev_epsilon_str1);
         updateStringIfChanged(epsilon_track_y + 1, board_x, std::string(epsilon_track_str2), prev_epsilon_str2);
         
         // Draw weight changes and saturation metrics after epsilon info
         if (agent->training_episodes > 0) {
             int weight_y = epsilon_track_y + 2;  // Start after epsilon info
+            bool is_learning = agent->isStillLearning();
             std::string weight_stats = agent->q_network.getWeightStatsString(
-                agent->training_episodes, agent->last_batch_error);
+                agent->training_episodes, agent->last_batch_error, is_learning);
             
             // Split weight stats on multiple lines if it contains newline
             // Only update if different
@@ -1099,6 +1126,11 @@ int main(int argc, char* argv[]) {
     RLAgent agent(model_file);  // Load from specified model file
     ParameterTuner tuner;
     
+    // Save best model with date and max score on program start
+    if (agent.best_score > 0) {
+        agent.saveBestModelWithDate();
+    }
+    
     // Auto-start in training mode for continuous learning
     game.training_mode = true;
     game.ai_enabled = true;
@@ -1223,44 +1255,55 @@ int main(int argc, char* argv[]) {
                 
                 // Collect experience for training
                 if (game.training_mode && last_state.size() > 0) {
-                    // Calculate reward (improved reward shaping for better learning)
+                    // SIMPLIFIED REWARD STRUCTURE - Focus on core objectives
                     double reward = 0.0;
-                    int score_diff = game.score - game.last_score;
+                    
+                    // PRIMARY OBJECTIVE: Clear lines (main goal of Tetris)
                     int lines_diff = game.lines_cleared - game.last_lines;
+                    reward += lines_diff * 15.0;  // IMPROVED: Increased from 10.0 to 15.0 for better emphasis (Priority 3)
                     
-                    // Primary rewards (most important) - significantly increased
-                    reward += lines_diff * 20.0;      // Increased from 5.0 (4x) - line clearing is main objective
-                    reward += score_diff * 0.5;        // Increased from 0.1 (5x) - score increases are important
+                    // Combo bonus: Extra reward for clearing multiple lines at once
+                    if (lines_diff > 1) {
+                        reward += lines_diff * 5.0;  // Bonus for combos (2+ lines)
+                    }
                     
-                    // Survival bonus (encourage staying alive) - increased
+                    // SECONDARY OBJECTIVE: Survival (stay alive)
+                    // FIX: Increased survival bonus to make most moves positive
                     if (!game.game_over) {
-                        reward += 2.0;  // Increased from 1.0 (2x) - survival is crucial
+                        reward += 5.0;  // IMPROVED: Increased from 1.0 to 5.0 to make moves positive
                     }
                     
-                    // Game over penalty - significantly increased
+                    // CRITICAL: Game over penalty (avoid at all costs)
                     if (game.game_over) {
-                        reward -= 200.0;  // Increased from 50.0 (4x) - game over is very bad
+                        reward -= 100.0;  // Strong but not overwhelming penalty
                     }
                     
-                    // State quality penalties (prevent bad states) - increased for better guidance
-                    int aggregate_height = game.getAggregateHeight(game.board);
-                    reward -= aggregate_height * 0.2;  // Increased from 0.05 (4x) - high stacks are dangerous
-                    
-                    int holes = game.countHoles(game.board);
-                    reward -= holes * 1.5;  // Increased from 0.3 (5x) - holes are very bad
-                    
-                    int bumpiness = game.calculateBumpiness(game.board);
-                    reward -= bumpiness * 0.1;  // Increased from 0.02 (5x) - uneven surface is problematic
-                    
-                    // Bonus for keeping board low (encourage good play) - increased
+                    // STATE QUALITY: Normalized penalties (not overwhelming)
+                    // Height penalty (encourage keeping board low)
                     int max_height = 0;
+                    std::vector<int> column_heights(game.WIDTH);
                     for (int x = 0; x < game.WIDTH; x++) {
                         int h = game.getColumnHeight(x, game.board);
+                        column_heights[x] = h;
                         if (h > max_height) max_height = h;
                     }
-                    if (max_height < 10) {
-                        reward += 2.0;  // Increased from 0.5 (4x) - low board is good
+                    // FIX: Reduced height penalty to prevent all moves being negative
+                    reward -= max_height * 0.1;  // IMPROVED: Reduced from 0.2 to 0.1
+                    
+                    // Well depth reward (encourage creating wells for I-piece strategy)
+                    int deepest_well = 0;
+                    for (int x = 0; x < game.WIDTH; x++) {
+                        int left_height = (x > 0) ? column_heights[x-1] : column_heights[x];
+                        int right_height = (x < game.WIDTH-1) ? column_heights[x+1] : column_heights[x];
+                        int well_depth = std::max(left_height, right_height) - column_heights[x];
+                        deepest_well = std::max(deepest_well, well_depth);
                     }
+                    reward += deepest_well * 0.3;  // Reward for creating wells (helps I-piece placement)
+                    
+                    // Holes penalty (encourage avoiding holes)
+                    // FIX: Reduced holes penalty to prevent all moves being negative
+                    int holes = game.countHoles(game.board);
+                    reward -= holes * 0.2;  // IMPROVED: Reduced from 0.5 to 0.2
                     
                     // Store experience
                     Experience exp;
@@ -1337,21 +1380,12 @@ int main(int argc, char* argv[]) {
             // Update training statistics
             agent.total_games++;
             if (game.score > agent.best_score) {
-                int old_best = agent.best_score;
                 agent.best_score = game.score;
                 
-                // Save best model to separate file
-                std::string best_model_file = "tetris_model_best.txt";
-                agent.saveModelToFile(best_model_file);
+                // Save best model only if it's better than existing best, with timestamp and score in filename
+                agent.saveBestModelIfBetter(game.score);
                 
-                // Log best score achievement
-                std::ofstream logfile("debug.log", std::ios::app);
-                if (logfile.is_open()) {
-                    logfile << "[BEST] New best score: " << old_best << " -> " << game.score 
-                            << " | Saved to " << best_model_file << std::endl;
-                }
-                
-                debugLog("New best score! Model saved to tetris_model_best.txt");
+                debugLog("New best score! Checking if model should be saved...");
             }
             
             // Update running average (simple moving average of last N games)
@@ -1376,12 +1410,20 @@ int main(int argc, char* argv[]) {
                 agent.games_since_best_improvement++;
             }
             
-            if (agent.total_games <= RLAgent::RECENT_SCORES_COUNT) {
-                agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
+            // Use sliding window average for more responsive updates
+            // Calculate average of recent scores (last RECENT_SCORES_COUNT games)
+            if (agent.recent_scores.size() > 0) {
+                int window_size = std::min((int)agent.recent_scores.size(), RLAgent::RECENT_SCORES_COUNT);
+                double sum = 0.0;
+                // Sum last N scores
+                int start_idx = std::max(0, (int)agent.recent_scores.size() - window_size);
+                for (int i = start_idx; i < (int)agent.recent_scores.size(); i++) {
+                    sum += agent.recent_scores[i];
+                }
+                agent.average_score = sum / window_size;
             } else {
-                // For sliding window, we'd need to track individual scores
-                // For simplicity, use exponential moving average
-                agent.average_score = agent.average_score * 0.99 + game.score * 0.01;
+                // Fallback: simple average if no recent scores yet
+                agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
             }
             
             // Record score for parameter tuning
@@ -1458,6 +1500,10 @@ int main(int argc, char* argv[]) {
     // Save model on exit if training
     if (game.training_mode) {
         agent.saveModel();
+        // Save best model with date and max score on program exit
+        if (agent.best_score > 0) {
+            agent.saveBestModelWithDate();
+        }
     }
     
     endwin();

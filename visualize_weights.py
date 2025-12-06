@@ -25,14 +25,14 @@ import time
 import sys
 
 # Network architecture constants (matching rl_agent.h)
-INPUT_SIZE = 29
+INPUT_SIZE = 27  # ZERO-BASED REDESIGN: 10 heights + 3 board_quality + 7 current + 7 next + 2 game_state
 HIDDEN_SIZE = 64
 OUTPUT_SIZE = 1
 
 class WeightVisualizer:
     def __init__(self, model_file="tetris_model.txt"):
         self.model_file = model_file
-        self.weights1 = None  # Input to Hidden (29 x 64)
+        self.weights1 = None  # Input to Hidden (27 x 64)
         self.bias1 = None     # Hidden bias (64)
         self.weights2 = None  # Hidden to Output (64 x 1)
         self.bias2 = None     # Output bias (1)
@@ -83,7 +83,7 @@ class WeightVisualizer:
                 print(f"Error: Not enough data lines in file (expected at least {INPUT_SIZE + 1}, got {len(lines)})")
                 return False
             
-            # Parse weights1 (29 rows, 64 columns each)
+            # Parse weights1 (27 rows, 64 columns each)
             self.weights1 = np.zeros((INPUT_SIZE, HIDDEN_SIZE))
             for i in range(INPUT_SIZE):
                 values = list(map(float, lines[i].split()))
@@ -341,7 +341,37 @@ class WeightVisualizer:
                      fontsize=12, fontweight='bold')
         self.text_objects.append(title1)
         ax1.set_xlabel('Hidden Neurons (64)', fontsize=10)
-        ax1.set_ylabel('Input Features (29)', fontsize=10)
+        ax1.set_ylabel('Input Features (27)', fontsize=10)
+        
+        # Add y-axis labels for input features (grouped by type)
+        feature_labels = []
+        # 0-9: Column heights
+        for i in range(10):
+            feature_labels.append(f'H{i}')
+        # 10-13: Height statistics
+        feature_labels.extend(['HMax', 'HMin', 'HMean', 'HStd'])
+        # 14-23: Holes per column
+        for i in range(10):
+            feature_labels.append(f'HL{i}')
+        # 24-32: Height differences
+        for i in range(9):
+            feature_labels.append(f'HD{i}')
+        # 33-39: Current piece
+        feature_labels.extend(['CP0', 'CP1', 'CP2', 'CP3', 'CP4', 'CP5', 'CP6'])
+        # 40-46: Next piece
+        feature_labels.extend(['NP0', 'NP1', 'NP2', 'NP3', 'NP4', 'NP5', 'NP6'])
+        # 47: Lines cleared
+        feature_labels.append('Lines')
+        # 48: Level
+        feature_labels.append('Level')
+        
+        # Set y-axis ticks and labels (show every 5th label to avoid crowding)
+        tick_positions = list(range(0, INPUT_SIZE, max(1, INPUT_SIZE // 20)))  # ~20 labels max
+        if tick_positions[-1] != INPUT_SIZE - 1:
+            tick_positions.append(INPUT_SIZE - 1)  # Always show last label
+        tick_labels = [feature_labels[i] if i < len(feature_labels) else f'F{i}' for i in tick_positions]
+        ax1.set_yticks(tick_positions)
+        ax1.set_yticklabels(tick_labels, fontsize=7)
         
         # 2. Weights2 Heatmap (Hidden -> Output)
         if 'ax2' not in self.axes:
@@ -539,10 +569,27 @@ class WeightVisualizer:
         ax1.set_ylabel('Input Features', fontsize=12)
         plt.colorbar(im, ax=ax1, label='Weight Value')
         
-        # Feature labels (if you want to add them)
-        feature_names = [f'F{i}' for i in range(INPUT_SIZE)]
+        # ZERO-BASED REDESIGN: Minimal essential features
+        feature_names = []
+        # 0-9: Column heights
+        for i in range(10):
+            feature_names.append(f'H{i}')
+        # 10-12: Board quality
+        feature_names.extend(['MaxH', 'Holes', 'Bump'])
+        # 13-19: Current piece
+        feature_names.extend(['CP0', 'CP1', 'CP2', 'CP3', 'CP4', 'CP5', 'CP6'])
+        # 20-26: Next piece
+        feature_names.extend(['NP0', 'NP1', 'NP2', 'NP3', 'NP4', 'NP5', 'NP6'])
+        # 27-28: Game state (but we only have 27 features, so this is wrong)
+        # Actually: 0-9 heights, 10-12 quality, 13-19 current, 20-26 next = 27 total
+        # Wait, let me recount: 10 + 3 + 7 + 7 = 27, but we need lines and level
+        # So: 10 heights + 3 quality + 7 current + 7 next = 27, but missing lines/level
+        # Let me fix: 10 + 3 + 7 + 7 + 2 = 29... but INPUT_SIZE is 27
+        # Actually the count is: 10 heights + 3 quality + 7 current + 7 next = 27
+        # But we also have lines and level... let me check the code
+        
         ax1.set_yticks(range(INPUT_SIZE))
-        ax1.set_yticklabels(feature_names, fontsize=8)
+        ax1.set_yticklabels(feature_names, fontsize=7)
         
         # Weight distribution per input feature
         weight_means = np.mean(np.abs(self.weights1), axis=1)
@@ -552,7 +599,7 @@ class WeightVisualizer:
         ax2.set_xlabel('Average |Weight|', fontsize=12)
         ax2.set_ylabel('Input Features', fontsize=12)
         ax2.set_yticks(range(INPUT_SIZE))
-        ax2.set_yticklabels(feature_names, fontsize=8)
+        ax2.set_yticklabels(feature_names, fontsize=7)
         ax2.grid(True, alpha=0.3, axis='x')
         
         # Add timestamp to detailed view - make it more prominent

@@ -1,291 +1,307 @@
 #!/usr/bin/env python3
 """
-Model Analysis Script
-Analyzes the neural network model file for training consistency and data integrity.
+Model Analysis Tool
+Analyzes the neural network model file and provides comprehensive statistics.
 """
 
 import sys
-import re
 import numpy as np
 from collections import Counter
 
-def parse_model_file(filename):
-    """Parse the model file and extract weights, biases, and metadata."""
-    with open(filename, 'r') as f:
-        lines = f.readlines()
-    
-    # Skip header comments
-    data_start = 0
-    metadata_start = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith('#'):
-            continue
-        if line.strip().startswith('FILENAME') or line.strip().startswith('EPSILON'):
-            metadata_start = i
-            break
-        if data_start == 0 and line.strip():
-            data_start = i
-    
-    # Parse weights and biases
+# Network architecture constants
+INPUT_SIZE = 27
+HIDDEN_SIZE = 64
+OUTPUT_SIZE = 1
+
+def load_model(filename):
+    """Load model from file and extract weights/biases."""
     weights1 = []
     bias1 = []
     weights2 = []
     bias2 = []
-    
-    current_section = 'weights1'
-    expected_weights1_rows = 29
-    expected_hidden_size = 64
-    
-    for i in range(data_start, metadata_start if metadata_start else len(lines)):
-        line = lines[i].strip()
-        if not line:
-            continue
-        
-        # Try to parse as numbers
-        try:
-            values = [float(x) for x in line.split()]
-            
-            if current_section == 'weights1':
-                if len(weights1) < expected_weights1_rows:
-                    weights1.append(values)
-                else:
-                    # Check if this is bias1 (should be 64 values)
-                    if len(values) == expected_hidden_size:
-                        current_section = 'bias1'
-                        bias1 = values
-                    else:
-                        # Might be weights2 (64 rows of 1 value each)
-                        current_section = 'weights2'
-                        weights2.append(values)
-            elif current_section == 'bias1':
-                # After bias1, should be weights2
-                if len(values) == 1:
-                    # Single value - might be start of weights2 or bias2
-                    if len(weights2) == 0:
-                        current_section = 'weights2'
-                        weights2.append(values)
-                    else:
-                        # Could be bias2
-                        if len(weights2) < expected_hidden_size:
-                            weights2.append(values)
-                        else:
-                            current_section = 'bias2'
-                            bias2 = values
-                else:
-                    weights2.append(values)
-            elif current_section == 'weights2':
-                if len(weights2) < expected_hidden_size:
-                    weights2.append(values)
-                else:
-                    current_section = 'bias2'
-                    bias2 = values
-            elif current_section == 'bias2':
-                # Should only be one value
-                if len(bias2) == 0:
-                    bias2 = values
-        except ValueError:
-            continue
-    
-    # Parse metadata
     metadata = {}
-    if metadata_start:
-        for i in range(metadata_start, len(lines)):
-            line = lines[i].strip()
-            if not line or line.startswith('#'):
-                continue
+    
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+    
+    # Parse header/metadata
+    data_start = 0
+    in_metadata = False
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line.startswith('# Training State Metadata'):
+            in_metadata = True
+            continue
+        if in_metadata and line.startswith('#'):
+            continue
+        if in_metadata and line:
+            # Parse metadata line (format: KEY VALUE)
             parts = line.split()
             if len(parts) >= 2:
                 key = parts[0]
                 try:
-                    value = float(parts[1]) if '.' in parts[1] or 'e' in parts[1].lower() else int(parts[1])
-                    metadata[key] = value
-                except ValueError:
-                    metadata[key] = ' '.join(parts[1:])
+                    if key == 'EPSILON':
+                        metadata['EPSILON'] = float(parts[1])
+                    elif key == 'EPSILON_MIN':
+                        metadata['EPSILON_MIN'] = float(parts[1])
+                    elif key == 'EPSILON_DECAY':
+                        metadata['EPSILON_DECAY'] = float(parts[1])
+                    elif key == 'LEARNING_RATE':
+                        metadata['LEARNING_RATE'] = float(parts[1])
+                    elif key == 'GAMMA':
+                        metadata['GAMMA'] = float(parts[1])
+                    elif key == 'TRAINING_EPISODES':
+                        metadata['TRAINING_EPISODES'] = int(parts[1])
+                    elif key == 'TOTAL_GAMES':
+                        metadata['TOTAL_GAMES'] = int(parts[1])
+                    elif key == 'BEST_SCORE':
+                        metadata['BEST_SCORE'] = int(parts[1])
+                    elif key == 'AVERAGE_SCORE':
+                        metadata['AVERAGE_SCORE'] = float(parts[1])
+                except:
+                    pass
+        elif line and not line.startswith('#'):
+            if data_start == 0:
+                data_start = i
+            if in_metadata:
+                in_metadata = False
+    
+    # Parse weights and biases
+    current_line = data_start
+    
+    # Load weights1 (INPUT_SIZE rows, HIDDEN_SIZE columns each)
+    for i in range(INPUT_SIZE):
+        if current_line >= len(lines):
+            break
+        line = lines[current_line].strip()
+        if line and not line.startswith('#'):
+            weights = [float(x) for x in line.split() if x]
+            if len(weights) == HIDDEN_SIZE:
+                weights1.append(weights)
+            current_line += 1
+    
+    # Load bias1 (HIDDEN_SIZE values)
+    if current_line < len(lines):
+        line = lines[current_line].strip()
+        if line and not line.startswith('#'):
+            bias1 = [float(x) for x in line.split() if x]
+            current_line += 1
+    
+    # Load weights2 (HIDDEN_SIZE rows, OUTPUT_SIZE columns each)
+    for i in range(HIDDEN_SIZE):
+        if current_line >= len(lines):
+            break
+        line = lines[current_line].strip()
+        if line and not line.startswith('#'):
+            weights = [float(x) for x in line.split() if x]
+            if len(weights) == OUTPUT_SIZE:
+                weights2.append(weights)
+            current_line += 1
+    
+    # Load bias2 (OUTPUT_SIZE values)
+    if current_line < len(lines):
+        line = lines[current_line].strip()
+        if line and not line.startswith('#'):
+            bias2 = [float(x) for x in line.split() if x]
     
     return weights1, bias1, weights2, bias2, metadata
 
-def analyze_weights(weights, name, expected_shape, expected_range=None):
-    """Analyze a weight matrix for anomalies."""
-    print(f"\n{'='*60}")
-    print(f"Analysis: {name}")
-    print(f"{'='*60}")
+def analyze_array(arr, name):
+    """Analyze an array and return statistics."""
+    arr_flat = np.array(arr).flatten()
+    arr_flat = arr_flat[np.isfinite(arr_flat)]  # Remove NaN/Inf
     
-    if not weights:
-        print(f"❌ ERROR: {name} is empty!")
-        return False
+    if len(arr_flat) == 0:
+        return {
+            'count': 0,
+            'mean': 0.0,
+            'std': 0.0,
+            'min': 0.0,
+            'max': 0.0,
+            'nan_count': 0,
+            'inf_count': 0,
+            'zero_count': 0,
+            'saturation': 0.0
+        }
     
-    # Convert to numpy array
-    try:
-        arr = np.array(weights)
-        actual_shape = arr.shape
-        print(f"Shape: Expected {expected_shape}, Got {actual_shape}")
-        
-        if actual_shape != expected_shape:
-            print(f"⚠️  WARNING: Shape mismatch!")
-            return False
-        
-        # Basic statistics
-        print(f"\nStatistics:")
-        print(f"  Min:    {np.min(arr):.6f}")
-        print(f"  Max:    {np.max(arr):.6f}")
-        print(f"  Mean:   {np.mean(arr):.6f}")
-        print(f"  Std:    {np.std(arr):.6f}")
-        print(f"  Median: {np.median(arr):.6f}")
-        
-        # Check for NaN and Inf
-        nan_count = np.isnan(arr).sum()
-        inf_count = np.isinf(arr).sum()
-        if nan_count > 0:
-            print(f"❌ ERROR: Found {nan_count} NaN values!")
-            return False
-        if inf_count > 0:
-            print(f"❌ ERROR: Found {inf_count} Inf values!")
-            return False
-        
-        # Check range
-        if expected_range:
-            min_val, max_val = expected_range
-            out_of_range = np.sum((arr < min_val) | (arr > max_val))
-            if out_of_range > 0:
-                print(f"⚠️  WARNING: {out_of_range} values out of expected range [{min_val}, {max_val}]")
-                print(f"  Actual range: [{np.min(arr):.6f}, {np.max(arr):.6f}]")
-            else:
-                print(f"✓ All values within expected range [{min_val}, {max_val}]")
-        
-        # Check for saturation (many identical values)
-        unique_values, counts = np.unique(arr, return_counts=True)
-        most_common = sorted(zip(counts, unique_values), reverse=True)[:5]
-        print(f"\nMost common values:")
-        for count, value in most_common:
-            percentage = (count / arr.size) * 100
-            print(f"  {value:.6f}: {count} times ({percentage:.2f}%)")
-            if percentage > 50:
-                print(f"  ⚠️  WARNING: High saturation! {percentage:.2f}% of values are identical")
-        
-        # Check variance
-        variance = np.var(arr)
-        print(f"\nVariance: {variance:.6f}")
-        if variance < 0.01:
-            print(f"⚠️  WARNING: Very low variance - weights may be too uniform")
-        elif variance > 10:
-            print(f"⚠️  WARNING: Very high variance - weights may be unstable")
-        
-        # Check for zero or near-zero values
-        near_zero = np.sum(np.abs(arr) < 1e-10)
-        if near_zero > 0:
-            print(f"⚠️  WARNING: {near_zero} values are near-zero (< 1e-10)")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ ERROR analyzing {name}: {e}")
-        return False
+    # Count special values
+    arr_all = np.array(arr).flatten()
+    nan_count = np.sum(np.isnan(arr_all))
+    inf_count = np.sum(np.isinf(arr_all))
+    zero_count = np.sum(arr_flat == 0.0)
+    
+    # Calculate saturation (percentage of most common value)
+    if len(arr_flat) > 0:
+        rounded = np.round(arr_flat, decimals=6)
+        counter = Counter(rounded)
+        most_common_count = counter.most_common(1)[0][1] if counter else 0
+        saturation = (most_common_count / len(arr_flat)) * 100.0
+    else:
+        saturation = 0.0
+    
+    return {
+        'count': len(arr_flat),
+        'mean': float(np.mean(arr_flat)),
+        'std': float(np.std(arr_flat)),
+        'min': float(np.min(arr_flat)),
+        'max': float(np.max(arr_flat)),
+        'nan_count': int(nan_count),
+        'inf_count': int(inf_count),
+        'zero_count': int(zero_count),
+        'saturation': saturation
+    }
 
-def analyze_metadata(metadata):
-    """Analyze training metadata for consistency."""
-    print(f"\n{'='*60}")
-    print(f"Training Metadata Analysis")
-    print(f"{'='*60}")
+def print_analysis(filename):
+    """Print comprehensive model analysis."""
+    print("=" * 80)
+    print(f"MODEL ANALYSIS: {filename}")
+    print("=" * 80)
+    print()
     
-    if not metadata:
-        print("❌ ERROR: No metadata found!")
-        return False
+    try:
+        weights1, bias1, weights2, bias2, metadata = load_model(filename)
+    except Exception as e:
+        print(f"ERROR: Failed to load model: {e}")
+        return
     
-    print("\nMetadata values:")
-    for key, value in metadata.items():
-        print(f"  {key}: {value}")
+    # Check if model loaded correctly
+    if len(weights1) != INPUT_SIZE:
+        print(f"WARNING: Expected {INPUT_SIZE} rows in weights1, got {len(weights1)}")
+    if len(bias1) != HIDDEN_SIZE:
+        print(f"WARNING: Expected {HIDDEN_SIZE} values in bias1, got {len(bias1)}")
+    if len(weights2) != HIDDEN_SIZE:
+        print(f"WARNING: Expected {HIDDEN_SIZE} rows in weights2, got {len(weights2)}")
+    if len(bias2) != OUTPUT_SIZE:
+        print(f"WARNING: Expected {OUTPUT_SIZE} values in bias2, got {len(bias2)}")
+    print()
     
-    # Check consistency
+    # Print metadata
+    print("TRAINING STATE METADATA:")
+    print("-" * 80)
+    if metadata:
+        for key, value in metadata.items():
+            print(f"  {key}: {value}")
+    else:
+        print("  No metadata found")
+    print()
+    
+    # Analyze weights1
+    print("WEIGHTS1 (Input -> Hidden):")
+    print("-" * 80)
+    w1_stats = analyze_array(weights1, "weights1")
+    print(f"  Count: {w1_stats['count']}")
+    print(f"  Mean:  {w1_stats['mean']:.6f}")
+    print(f"  Std:   {w1_stats['std']:.6f}")
+    print(f"  Min:   {w1_stats['min']:.6f}")
+    print(f"  Max:   {w1_stats['max']:.6f}")
+    print(f"  NaN:   {w1_stats['nan_count']}")
+    print(f"  Inf:   {w1_stats['inf_count']}")
+    print(f"  Zeros: {w1_stats['zero_count']} ({w1_stats['zero_count']/w1_stats['count']*100:.1f}%)")
+    print(f"  Saturation: {w1_stats['saturation']:.2f}%")
+    
+    # Check for issues
+    if w1_stats['nan_count'] > 0 or w1_stats['inf_count'] > 0:
+        print(f"  ⚠️  ISSUE: Contains NaN/Inf values!")
+    if w1_stats['saturation'] > 50.0:
+        print(f"  ⚠️  WARNING: High saturation ({w1_stats['saturation']:.1f}%) - weights may be stuck")
+    if abs(w1_stats['mean']) > 1.0:
+        print(f"  ⚠️  WARNING: Large mean value ({w1_stats['mean']:.3f})")
+    if w1_stats['std'] < 0.01:
+        print(f"  ⚠️  WARNING: Very low variance ({w1_stats['std']:.6f}) - weights may be too uniform")
+    print()
+    
+    # Analyze bias1
+    print("BIAS1 (Hidden Layer):")
+    print("-" * 80)
+    b1_stats = analyze_array(bias1, "bias1")
+    print(f"  Count: {b1_stats['count']}")
+    print(f"  Mean:  {b1_stats['mean']:.6f}")
+    print(f"  Std:   {b1_stats['std']:.6f}")
+    print(f"  Min:   {b1_stats['min']:.6f}")
+    print(f"  Max:   {b1_stats['max']:.6f}")
+    print(f"  NaN:   {b1_stats['nan_count']}")
+    print(f"  Inf:   {b1_stats['inf_count']}")
+    print(f"  Zeros: {b1_stats['zero_count']} ({b1_stats['zero_count']/b1_stats['count']*100:.1f}%)")
+    print(f"  Saturation: {b1_stats['saturation']:.2f}%")
+    
+    if b1_stats['nan_count'] > 0 or b1_stats['inf_count'] > 0:
+        print(f"  ⚠️  ISSUE: Contains NaN/Inf values!")
+    if b1_stats['saturation'] > 50.0:
+        print(f"  ⚠️  WARNING: High saturation ({b1_stats['saturation']:.1f}%)")
+    print()
+    
+    # Analyze weights2
+    print("WEIGHTS2 (Hidden -> Output):")
+    print("-" * 80)
+    w2_stats = analyze_array(weights2, "weights2")
+    print(f"  Count: {w2_stats['count']}")
+    print(f"  Mean:  {w2_stats['mean']:.6f}")
+    print(f"  Std:   {w2_stats['std']:.6f}")
+    print(f"  Min:   {w2_stats['min']:.6f}")
+    print(f"  Max:   {w2_stats['max']:.6f}")
+    print(f"  NaN:   {w2_stats['nan_count']}")
+    print(f"  Inf:   {w2_stats['inf_count']}")
+    print(f"  Zeros: {w2_stats['zero_count']} ({w2_stats['zero_count']/w2_stats['count']*100:.1f}%)")
+    print(f"  Saturation: {w2_stats['saturation']:.2f}%")
+    
+    if w2_stats['nan_count'] > 0 or w2_stats['inf_count'] > 0:
+        print(f"  ⚠️  ISSUE: Contains NaN/Inf values!")
+    if w2_stats['saturation'] > 50.0:
+        print(f"  ⚠️  WARNING: High saturation ({w2_stats['saturation']:.1f}%)")
+    print()
+    
+    # Analyze bias2
+    print("BIAS2 (Output Layer):")
+    print("-" * 80)
+    b2_stats = analyze_array(bias2, "bias2")
+    print(f"  Count: {b2_stats['count']}")
+    print(f"  Mean:  {b2_stats['mean']:.6f}")
+    print(f"  Std:   {b2_stats['std']:.6f}")
+    print(f"  Min:   {b2_stats['min']:.6f}")
+    print(f"  Max:   {b2_stats['max']:.6f}")
+    print(f"  NaN:   {b2_stats['nan_count']}")
+    print(f"  Inf:   {b2_stats['inf_count']}")
+    print()
+    
+    # Overall assessment
+    print("OVERALL ASSESSMENT:")
+    print("-" * 80)
     issues = []
+    if w1_stats['nan_count'] > 0 or w1_stats['inf_count'] > 0:
+        issues.append("NaN/Inf values in weights1")
+    if b1_stats['nan_count'] > 0 or b1_stats['inf_count'] > 0:
+        issues.append("NaN/Inf values in bias1")
+    if w2_stats['nan_count'] > 0 or w2_stats['inf_count'] > 0:
+        issues.append("NaN/Inf values in weights2")
+    if b2_stats['nan_count'] > 0 or b2_stats['inf_count'] > 0:
+        issues.append("NaN/Inf values in bias2")
     
-    # Check epsilon
-    if 'EPSILON' in metadata and 'EPSILON_MIN' in metadata:
-        epsilon = metadata['EPSILON']
-        epsilon_min = metadata['EPSILON_MIN']
-        if epsilon < epsilon_min:
-            issues.append(f"⚠️  EPSILON ({epsilon}) < EPSILON_MIN ({epsilon_min})")
-        else:
-            print(f"✓ Epsilon is valid: {epsilon} >= {epsilon_min}")
+    if w1_stats['saturation'] > 50.0:
+        issues.append("High saturation in weights1")
+    if b1_stats['saturation'] > 50.0:
+        issues.append("High saturation in bias1")
+    if w2_stats['saturation'] > 50.0:
+        issues.append("High saturation in weights2")
     
-    # Check training progress
-    if 'TRAINING_EPISODES' in metadata and 'TOTAL_GAMES' in metadata:
-        episodes = metadata['TRAINING_EPISODES']
-        games = metadata['TOTAL_GAMES']
-        if episodes > 0 and games > 0:
-            episodes_per_game = episodes / games
-            print(f"✓ Episodes per game: {episodes_per_game:.2f}")
-            if episodes_per_game < 1:
-                issues.append(f"⚠️  Very few episodes per game ({episodes_per_game:.2f})")
-    
-    # Check scores
-    if 'BEST_SCORE' in metadata and 'AVERAGE_SCORE' in metadata:
-        best = metadata['BEST_SCORE']
-        avg = metadata['AVERAGE_SCORE']
-        if avg > best:
-            issues.append(f"⚠️  AVERAGE_SCORE ({avg}) > BEST_SCORE ({best})")
-        else:
-            print(f"✓ Score consistency: Best={best}, Avg={avg:.2f}")
+    if abs(w1_stats['mean']) > 1.0:
+        issues.append("Large mean in weights1")
+    if abs(w2_stats['mean']) > 1.0:
+        issues.append("Large mean in weights2")
     
     if issues:
-        print("\n⚠️  Issues found:")
+        print("  ⚠️  ISSUES FOUND:")
         for issue in issues:
-            print(f"  {issue}")
+            print(f"    - {issue}")
     else:
-        print("\n✓ Metadata appears consistent")
+        print("  ✅ Model appears healthy")
     
-    return len(issues) == 0
-
-def main():
-    filename = "tetris_model.txt"
-    
-    print("="*60)
-    print("Neural Network Model Analysis")
-    print("="*60)
-    print(f"\nAnalyzing: {filename}\n")
-    
-    try:
-        weights1, bias1, weights2, bias2, metadata = parse_model_file(filename)
-        
-        # Analyze each component
-        all_ok = True
-        
-        all_ok &= analyze_weights(weights1, "Input-to-Hidden Weights (weights1)", 
-                                 (29, 64), expected_range=(-2.0, 2.0))
-        
-        all_ok &= analyze_weights([bias1], "Hidden Layer Biases (bias1)", 
-                                 (1, 64), expected_range=(-2.0, 2.0))
-        
-        all_ok &= analyze_weights(weights2, "Hidden-to-Output Weights (weights2)", 
-                                 (64, 1), expected_range=(-20.0, 20.0))
-        
-        all_ok &= analyze_weights([bias2], "Output Layer Bias (bias2)", 
-                                 (1, 1), expected_range=(-20.0, 20.0))
-        
-        all_ok &= analyze_metadata(metadata)
-        
-        # Overall assessment
-        print(f"\n{'='*60}")
-        print("Overall Assessment")
-        print(f"{'='*60}")
-        
-        if all_ok:
-            print("✓ Model appears to be consistent and valid")
-        else:
-            print("⚠️  Model has some issues that should be addressed")
-            print("\nRecommendations:")
-            print("  1. Check for weight saturation (many identical values)")
-            print("  2. Verify weights are within expected ranges")
-            print("  3. Check metadata consistency")
-            print("  4. Consider retraining if issues are severe")
-        
-    except Exception as e:
-        print(f"❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
-    
-    return 0 if all_ok else 1
+    print()
+    print("=" * 80)
 
 if __name__ == "__main__":
-    sys.exit(main())
-
+    if len(sys.argv) > 1:
+        filename = sys.argv[1]
+    else:
+        filename = "tetris_model.txt"
+    
+    print_analysis(filename)

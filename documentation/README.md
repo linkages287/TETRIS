@@ -1,45 +1,52 @@
 # Documentation Index
 
-This folder contains all documentation for the Tetris AI project.
+This directory contains current, relevant documentation for the Tetris Reinforcement Learning project.
 
-## Main Documentation
+## Current Documentation (18 files)
 
-- **README.md** (in project root) - Main project documentation and usage guide
+### Model Analysis & Improvements (5 files)
+- **MODEL_IMPROVEMENTS.md** - Latest model analysis and improvements (weight limits, learning rate)
+- **EPSILON_LEARNING_FIX.md** - Fix for epsilon decreasing faster than learning
+- **LEARNING_FIXES.md** - Fixes for negative Q-values and learning issues
+- **MODEL_ANALYSIS_AND_ACTIONS.md** - Model analysis with epsilon reset fixes
+- **CONVERGENCE_FIXES.md** - Convergence detection and epsilon reset fixes
 
-## Visualizer Documentation
+### Features & Architecture (4 files)
+- **FEATURE_VERIFICATION_AND_IMPROVEMENTS.md** - Feature correctness verification
+- **FEATURE_REDESIGN_COMPLETE.md** - Complete feature redesign (27 features)
+- **ZERO_BASED_FEATURES_COMPLETE.md** - Zero-based feature redesign summary
+- **NEURAL_NETWORK_ARCHITECTURE.md** - Explanation of W1, B1, W2, B2 layers
 
-- **WEIGHT_VISUALIZER_README.md** - C++ weight visualizer usage guide
-- **3D_VISUALIZER_GUIDE.md** - 3D visualization mode guide
-- **DYNAMIC_VISUALIZATION_GUIDE.md** - Python visualizer guide (legacy)
+### Algorithms (4 files)
+- **FINDBESTMOVE_ALGORITHM.md** - Best move selection algorithm documentation
+- **FINDBESTMOVE_ALGORITHM.html** - HTML version of algorithm documentation
+- **ALGORITHM_DIAGRAM.md** - Algorithm flow diagrams
+- **ALGORITHM_DIAGRAM.html** - HTML version of algorithm diagrams
 
-## Technical Reports
+### Monitoring & Metrics (2 files)
+- **SATURATION_METRICS.md** - Explanation of saturation thresholds and meaning
+- **B2_SATURATION_FIX.md** - Fix for B2 saturation always showing 100%
 
-- **MODEL_ANALYSIS_REPORT.md** - Comprehensive model analysis: weight saturation, training consistency, and recommendations
-- **MODEL_ANALYSIS_FIXES_APPLIED.md** - **NEW!** Documentation of all fixes applied based on model analysis recommendations
-- **NEURAL_NETWORK_ARCHITECTURE_REPORT.md** - Spiegazione dettagliata dell'architettura della rete (neuroni per strato)
-- **NETWORK_CONVERGENCE_REPORT.md** - How to detect when the network has converged
-- **MODEL_COHERENCE_REPORT.md** - Model file structure and validation report
-- **WEIGHT_SATURATION_REPORT.md** - Analysis of weight saturation issues
-- **LEARNING_PROCESS_FIXES.md** - Documentation of learning process improvements
+### Visualization (2 files)
+- **VISUALIZATION_UPDATE.md** - Visualization tool updates
+- **NEURON_DISPOSITION.md** - Neural network neuron layout explanation
 
-## Algorithm Documentation
-
-- **ALGORITHM_DIAGRAM.md** - Complete algorithm flow diagram (Markdown)
-- **ALGORITHM_DIAGRAM.html** - Algorithm diagram (HTML version for browser viewing)
-
-## Installation & Setup Guides
-
-- **INSTALL_MARKDOWN_VIEWER.md** - Guide for installing markdown viewers on Ubuntu
-- **FRESH_START_GUIDE.md** - Guide for starting fresh training after fixes
-
-## Fix Documentation
-
-- **FIXES_APPLIED.md** - Summary of fixes applied to the codebase
-- **FIX_MATPLOTLIB_CRASH.md** - Fix for matplotlib visualization crashes
+### Index (1 file)
+- **README.md** - This file
 
 ## Quick Links
 
-- **Project Root README**: See `../README.md` for main project documentation
-- **Source Code**: See `../` for source files
-- **Model Files**: See `../tetris_model.txt` for trained models
+- **Latest Improvements**: See `MODEL_IMPROVEMENTS.md`
+- **Epsilon Issues**: See `EPSILON_LEARNING_FIX.md`
+- **Learning Issues**: See `LEARNING_FIXES.md`
+- **Features**: See `FEATURE_REDESIGN_COMPLETE.md`
+- **Architecture**: See `NEURAL_NETWORK_ARCHITECTURE.md`
+- **Algorithm**: See `FINDBESTMOVE_ALGORITHM.md`
+- **Saturation**: See `SATURATION_METRICS.md`
 
+## Documentation Structure
+
+- **Current**: Files documenting recent fixes and improvements
+- **Architecture**: Neural network and algorithm documentation
+- **Features**: Feature engineering and verification
+- **Monitoring**: Metrics and analysis tools

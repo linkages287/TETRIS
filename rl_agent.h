@@ -27,7 +27,7 @@ public:
     std::vector<std::vector<double>> weights2;  // Hidden to output
     std::vector<double> bias2;                  // Output bias
     
-        static const int INPUT_SIZE = 29;   // State features: 10 heights + 1 holes + 1 bumpiness + 1 aggregate + 7 current + 7 next + 1 lines + 1 level
+        static const int INPUT_SIZE = 27;   // ZERO-BASED REDESIGN: 10 heights + 3 board_quality + 7 current + 7 next + 2 game_state
     static const int HIDDEN_SIZE = 64;
     static const int OUTPUT_SIZE = 1;  // Q-value
     
@@ -39,7 +39,7 @@ public:
     void save(const std::string& filename);
     bool load(const std::string& filename);
     void logWeightChanges(const std::string& filename, int episode, double error);
-    std::string getWeightStatsString(int episode, double error);  // Get stats as string for display
+    std::string getWeightStatsString(int episode, double error, bool is_learning = true);  // Get stats as string for display
     
     // Saturation monitoring
     struct SaturationMetrics {
@@ -92,6 +92,18 @@ public:
         double epsilon_change_reason;  // Reason for epsilon change (improvement %)
         int epsilon_increase_count;    // Count of epsilon increases
         int epsilon_decrease_count;    // Count of epsilon decreases
+        
+        // Score-Epsilon monitoring
+        std::deque<std::pair<int, double>> epsilon_score_history;  // (score, epsilon) pairs
+        static const int EPSILON_SCORE_HISTORY_SIZE = 50;  // Track last 50 games
+        double epsilon_at_score_100;   // Epsilon when score reached 100
+        double epsilon_at_score_500;   // Epsilon when score reached 500
+        double epsilon_at_score_1000;  // Epsilon when score reached 1000
+        
+        // Learning status tracking
+        std::deque<double> recent_batch_errors;  // Track recent batch errors to detect learning
+        static const int LEARNING_WINDOW = 100;  // Number of recent errors to track
+        bool isStillLearning() const;  // Check if network is still actively learning
     
     struct Move {
         int rotation;
@@ -104,6 +116,11 @@ public:
     // Extract state features from game
     std::vector<double> extractState(const TetrisGame& game);
     
+    // Extract state features from simulated board (helper for findBestMove)
+    std::vector<double> extractStateFromBoard(const std::vector<std::vector<int>>& sim_board, 
+                                              int lines_cleared, int level, 
+                                              const TetrisPiece* next_piece) const;
+    
     // Find best move using Q-learning
     Move findBestMove(const TetrisGame& game, bool training = false);
     
@@ -114,6 +131,9 @@ public:
     bool checkConvergence();  // Check if network has converged
     void saveModel();
     void saveModelToFile(const std::string& filename);  // Save model to specific file
+    void saveBestModelIfBetter(int current_score);  // Save best model only if score improved, with timestamp and score in filename
+    void saveBestModelWithDate();  // Save best model with date and max score (called on program start/exit)
+    static int readBestScoreFromFile(const std::string& filename);  // Helper to read BEST_SCORE from model file
 };
 
 #endif // RL_AGENT_H

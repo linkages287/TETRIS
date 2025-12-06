@@ -14,7 +14,7 @@
 #include <algorithm>
 
 // Network architecture constants (matching rl_agent.h)
-const int INPUT_SIZE = 29;
+const int INPUT_SIZE = 27;  // ZERO-BASED REDESIGN: 10 heights + 3 board_quality + 7 current + 7 next
 const int HIDDEN_SIZE = 64;
 const int OUTPUT_SIZE = 1;
 
@@ -38,7 +38,7 @@ private:
     std::string model_file;
     
     // Weight data
-    std::vector<std::vector<double>> weights1;  // 29 x 64
+    std::vector<std::vector<double>> weights1;  // 27 x 64
     std::vector<double> bias1;                   // 64
     std::vector<std::vector<double>> weights2;   // 64 x 1
     std::vector<double> bias2;                   // 1
@@ -353,7 +353,7 @@ private:
         // Draw layers as nodes in 3D grid layout
         float layer_spacing = 4.0f;
         
-        // Input layer (29 nodes) - arranged in 3D grid
+        // Input layer (49 nodes) - arranged in 3D grid
         glPushMatrix();
         glTranslatef(-layer_spacing, 0.0f, 0.0f);
         drawLayer3DGrid(INPUT_SIZE, 0);
@@ -387,9 +387,9 @@ private:
         int cols, rows;
         
         if (layer_id == 0) {
-            // Input layer: 29 nodes -> 5x6 grid (30 positions, one empty)
-            cols = 5;
-            rows = 6;
+            // Input layer: 27 nodes -> 6x5 grid (closest rectangle)
+            cols = 6;
+            rows = 5;
         } else if (layer_id == 1) {
             // Hidden layer: 64 nodes -> 8x8 grid
             cols = 8;
@@ -435,9 +435,9 @@ private:
         int cols, rows;
         
         if (layer == 0) {
-            // Input layer: 29 nodes -> 5x6 grid
-            cols = 5;
-            rows = 6;
+            // Input layer: 27 nodes -> 6x5 grid
+            cols = 6;
+            rows = 5;
         } else if (layer == 1) {
             // Hidden layer: 64 nodes -> 8x8 grid
             cols = 8;

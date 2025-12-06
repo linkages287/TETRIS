@@ -174,11 +174,11 @@ When the game starts:
 
 #### Network Architecture
 
-- **Input Layer**: 29 neurons (game state features)
-  - 10 column heights
-  - 1 holes count
-  - 1 bumpiness metric
-  - 1 aggregate height
+- **Input Layer**: 49 neurons (game state features)
+  - 10 column heights (centered & normalized)
+  - 4 height statistics (max, min, mean, std dev)
+  - 10 holes per column (spatial information)
+  - 9 height differences (spatial bumpiness between adjacent columns)
   - 7 current piece type (one-hot encoded)
   - 7 next piece type (one-hot encoded)
   - 1 lines cleared

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>findBestMove Algorithm Flowchart</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .mermaid {
+            text-align: center;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        .legend {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .legend h3 {
+            margin-top: 0;
+            color: #34495e;
+        }
+        .legend-item {
+            margin: 8px 0;
+            padding: 5px;
+        }
+        .code-block {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            margin: 10px 0;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>findBestMove Algorithm - Visual Flowchart</h1>
+    
+    <div class="container">
+        <div class="mermaid">
+graph TD
+    Start([findBestMove called]) --> CheckNull{current_piece<br/>== null?}
+    CheckNull -->|Yes| ReturnInvalid[Return invalid move<br/>0, 0, -∞]
+    CheckNull -->|No| Init[Initialize:<br/>best_move = -∞<br/>piece = current_piece]
+    
+    Init --> EpsilonGreedy{Epsilon-Greedy<br/>Decision<br/>random < epsilon?}
+    EpsilonGreedy -->|Yes<br/>Explore| RandomMove[Random Move:<br/>rot = rand%4<br/>x = rand%WIDTH]
+    RandomMove --> ReturnRandom[Return random move]
+    
+    EpsilonGreedy -->|No<br/>Exploit| Setup[Optimization Setup:<br/>Pre-cache constants<br/>Generate x_positions<br/>center-outward order]
+    
+    Setup --> RotLoop[FOR each rotation<br/>rot = 0 to 3<br/>AND evaluations < 300]
+    
+    RotLoop --> CalcBounds[Calculate Piece Bounds:<br/>Get blocks for rotation<br/>Find min_x, max_x]
+    
+    CalcBounds --> PosLoop[FOR each x position<br/>center → outward<br/>AND evaluations < 300]
+    
+    PosLoop --> BoundsCheck{Bounds Check:<br/>x + min_x < -2 OR<br/>x + max_x >= WIDTH+2?}
+    BoundsCheck -->|Yes| SkipBounds[Skip to next x]
+    SkipBounds --> PosLoop
+    
+    BoundsCheck -->|No| SetPos[Set piece position:<br/>piece.x = x<br/>piece.y = 0<br/>evaluations++]
+    
+    SetPos --> CollisionCheck{Early Collision<br/>Check?}
+    CollisionCheck -->|Yes| SkipCollision[Skip to next x]
+    SkipCollision --> PosLoop
+    
+    CollisionCheck -->|No| SimDrop[Simulate Drop:<br/>drop_y = 0<br/>while !collision<br/>drop_y++]
+    
+    SimDrop --> DropValid{Drop Valid?<br/>drop_y < max_drop?}
+    DropValid -->|No| SkipDrop[Skip to next x]
+    SkipDrop --> PosLoop
+    
+    DropValid -->|Yes| SimBoard[Simulate Board State:<br/>sim_board = placePiece<br/>lines_cleared = clearLines]
+    
+    SimBoard --> HeuristicFilter{Holes Filter:<br/>holes > 15 AND<br/>lines < 50?}
+    HeuristicFilter -->|Yes| SkipHoles[Skip to next x]
+    SkipHoles --> PosLoop
+    
+    HeuristicFilter -->|No| ExtractState[Extract State Features:<br/>29 features from board<br/>heights, holes, bumpiness,<br/>aggregate, pieces, lines, level]
+    
+    ExtractState --> EvalNetwork[Neural Network Evaluation:<br/>q_value = forward next_state]
+    
+    EvalNetwork --> UpdateBest{q_value ><br/>best_move.q_value?}
+    UpdateBest -->|No| ContinuePos[Continue to next x]
+    ContinuePos --> PosLoop
+    
+    UpdateBest -->|Yes| UpdateMove[Update best_move:<br/>rotation = rot<br/>x = x<br/>q_value = q_value]
+    
+    UpdateMove --> EarlyTerm1{Early Termination?<br/>q_value > 100.0 AND<br/>evaluations > 10?}
+    EarlyTerm1 -->|Yes| BreakPos[BREAK: Stop searching<br/>positions]
+    EarlyTerm1 -->|No| ContinuePos
+    
+    BreakPos --> EarlyTerm2{Rotation Termination?<br/>Excellent move AND<br/>evaluations > 20?}
+    ContinuePos --> EarlyTerm2
+    
+    EarlyTerm2 -->|Yes| BreakRot[BREAK: Stop searching<br/>rotations]
+    EarlyTerm2 -->|No| NextRot[Try next rotation]
+    NextRot --> RotLoop
+    
+    BreakRot --> ReturnBest[Return best_move<br/>rotation, x, q_value]
+    SkipBounds --> PosLoop
+    
+    style Start fill:#3498db,stroke:#2980b9,color:#fff
+    style ReturnInvalid fill:#e74c3c,stroke:#c0392b,color:#fff
+    style ReturnRandom fill:#e74c3c,stroke:#c0392b,color:#fff
+    style ReturnBest fill:#27ae60,stroke:#229954,color:#fff
+    style EvalNetwork fill:#f39c12,stroke:#d68910,color:#fff
+    style UpdateMove fill:#9b59b6,stroke:#7d3c98,color:#fff
+    style EarlyTerm1 fill:#e67e22,stroke:#d35400,color:#fff
+    style EarlyTerm2 fill:#e67e22,stroke:#d35400,color:#fff
+        </div>
+    </div>
+    
+    <div class="container">
+        <h2>Algorithm Phases</h2>
+        
+        <h3>Phase 1: Initialization & Exploration</h3>
+        <ul>
+            <li><strong>Null Check</strong>: Validates current piece exists</li>
+            <li><strong>Epsilon-Greedy</strong>: Decides between exploration (random) or exploitation (search)</li>
+            <li><strong>Exploration</strong>: Returns random move with probability <span class="highlight">epsilon</span></li>
+        </ul>
+        
+        <h3>Phase 2: Optimization Setup</h3>
+        <ul>
+            <li><strong>Pre-computation</strong>: Caches next_piece, lines_cleared, level</li>
+            <li><strong>Move Ordering</strong>: Generates x-positions ordered center-outward</li>
+            <li>Example: For WIDTH=10, order is [5, 4, 6, 3, 7, 2, 8, 1, 9, 0, 10, -1, 11, -2]</li>
+        </ul>
+        
+        <h3>Phase 3: Nested Search Loop</h3>
+        <div class="code-block">
+Outer Loop: For each rotation (0 to 3)
+    Calculate piece bounds (min_x, max_x)
+    
+    Inner Loop: For each x position (center-outward)
+        1. Bounds Check → Skip if off-board
+        2. Collision Check → Skip if immediate collision
+        3. Simulate Drop → Calculate landing position
+        4. Drop Validation → Skip if invalid
+        5. Simulate Board → Place piece & clear lines
+        6. Heuristic Filter → Skip if too many holes
+        7. Extract State → Create 29-feature vector
+        8. Evaluate → Get Q-value from neural network
+        9. Update Best → Track highest Q-value
+        10. Early Termination → Stop if excellent move found
+        </div>
+        
+        <h3>Phase 4: Early Termination</h3>
+        <ul>
+            <li><strong>Position-level</strong>: Stops searching positions if Q-value > 100.0 and ≥10 moves evaluated</li>
+            <li><strong>Rotation-level</strong>: Stops searching rotations if excellent move found and ≥20 moves evaluated</li>
+        </ul>
+        
+        <h3>Phase 5: Return Result</h3>
+        <ul>
+            <li>Returns move with highest Q-value: <code>{rotation, x, q_value}</code></li>
+        </ul>
+    </div>
+    
+    <div class="container legend">
+        <h3>State Features (29 total)</h3>
+        <div class="legend-item">
+            <strong>10 features:</strong> Column heights (normalized by /20.0)
+        </div>
+        <div class="legend-item">
+            <strong>1 feature:</strong> Holes count (normalized by /100.0)
+        </div>
+        <div class="legend-item">
+            <strong>1 feature:</strong> Bumpiness metric (normalized by /20.0)
+        </div>
+        <div class="legend-item">
+            <strong>1 feature:</strong> Aggregate height (normalized by /50.0)
+        </div>
+        <div class="legend-item">
+            <strong>7 features:</strong> Current piece type (one-hot, all 0s after placement)
+        </div>
+        <div class="legend-item">
+            <strong>7 features:</strong> Next piece type (one-hot encoded)
+        </div>
+        <div class="legend-item">
+            <strong>1 feature:</strong> Lines cleared (normalized by /100.0)
+        </div>
+        <div class="legend-item">
+            <strong>1 feature:</strong> Level (normalized by /20.0)
+        </div>
+    </div>
+    
+    <div class="container">
+        <h3>Performance Characteristics</h3>
+        <table style="width:100%; border-collapse: collapse;">
+            <tr style="background: #34495e; color: white;">
+                <th style="padding: 10px; border: 1px solid #ddd;">Scenario</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Evaluations</th>
+                <th style="padding: 10px; border: 1px solid #ddd;">Description</th>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #ddd;"><strong>Best Case</strong></td>
+                <td style="padding: 10px; border: 1px solid #ddd;">~10-20</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">Excellent move found early (early termination)</td>
+            </tr>
+            <tr style="background: #ecf0f1;">
+                <td style="padding: 10px; border: 1px solid #ddd;"><strong>Average Case</strong></td>
+                <td style="padding: 10px; border: 1px solid #ddd;">~50-100</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">Good move found after moderate search</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #ddd;"><strong>Worst Case</strong></td>
+                <td style="padding: 10px; border: 1px solid #ddd;">~300</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">Safety limit reached (all moves evaluated)</td>
+            </tr>
+        </table>
+        
+        <h3>Key Optimizations</h3>
+        <ol>
+            <li><strong>Move Ordering</strong>: Center positions tried first (more likely to be good)</li>
+            <li><strong>Early Termination</strong>: Stops when excellent move found (saves 50-80% evaluations)</li>
+            <li><strong>Heuristic Filtering</strong>: Skips obviously bad moves (too many holes)</li>
+            <li><strong>Bounds Optimization</strong>: Calculates piece width to filter invalid positions</li>
+            <li><strong>Pre-computation</strong>: Caches constants to avoid repeated access</li>
+        </ol>
+    </div>
+    
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+
