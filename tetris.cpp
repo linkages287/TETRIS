@@ -20,6 +20,7 @@
 #include <iostream>
 #include <cstring>
 #include <deque>
+#include <cstdio>
 #include "rl_agent.h"
 #include "parameter_tuner.h"
 #include "game_classes.h"
@@ -152,7 +153,6 @@ TetrisGame::TetrisGame()
 }
 
 TetrisGame::~TetrisGame() {
-    // Only delete if pointers are different to avoid double deletion
     if (current_piece != nullptr) {
         delete current_piece;
         current_piece = nullptr;
@@ -161,6 +161,35 @@ TetrisGame::~TetrisGame() {
         delete next_piece;
         next_piece = nullptr;
     }
+}
+
+void TetrisGame::reset() {
+    bool keep_ai = ai_enabled;
+    bool keep_training = training_mode;
+    
+    if (current_piece != nullptr) {
+        delete current_piece;
+        current_piece = nullptr;
+    }
+    if (next_piece != nullptr) {
+        delete next_piece;
+        next_piece = nullptr;
+    }
+    
+    board.assign(HEIGHT, std::vector<int>(WIDTH, 0));
+    score = 0;
+    lines_cleared = 0;
+    level = 1;
+    game_over = false;
+    paused = false;
+    last_score = 0;
+    last_lines = 0;
+    fall_delay = 0.5;
+    last_fall_time = std::chrono::steady_clock::now();
+    last_ai_time = std::chrono::steady_clock::now();
+    ai_enabled = keep_ai;
+    training_mode = keep_training;
+    spawnPiece();
 }
 
 void TetrisGame::spawnPiece() {
@@ -299,7 +328,9 @@ void TetrisGame::hardDrop() {
     // Safety limit to prevent infinite loop
     int drop_attempts = 0;
     while (movePiece(0, 1) && drop_attempts < HEIGHT * 2) {
-        score += 2;  // Bonus points for hard drop
+        if (!ai_enabled) {
+            score += 2;  // Bonus points for hard drop (human play only)
+        }
         drop_attempts++;
     }
     if (drop_attempts >= HEIGHT * 2) {
@@ -333,33 +364,27 @@ void TetrisGame::update() {
 void TetrisGame::executeAIMove(int rotation, int x_pos) {
     if (current_piece == nullptr) return;
     
-    // Rotate to desired rotation (with safety limit)
-    int rotation_attempts = 0;
-    while (current_piece->rotation != rotation && rotation_attempts < 10) {
-        rotatePiece();
-        rotation_attempts++;
-    }
-    if (rotation_attempts >= 10) {
-        // Debug: rotation stuck
-        static int debug_count = 0;
-        if (debug_count++ % 100 == 0) {
-            // Could log to file or screen, but avoiding I/O for now
+    // Apply the chosen placement directly so execution matches simulation.
+    current_piece->rotation = ((rotation % 4) + 4) % 4;
+    current_piece->x = x_pos;
+    current_piece->y = 0;
+    
+    if (checkCollision(*current_piece)) {
+        // Fallback: walk toward spawn until the piece fits, then drop.
+        current_piece->x = WIDTH / 2 - 2;
+        current_piece->y = 0;
+        if (checkCollision(*current_piece)) {
+            for (int kick : {-1, 1, -2, 2, -3, 3}) {
+                current_piece->x = WIDTH / 2 - 2 + kick;
+                if (!checkCollision(*current_piece)) {
+                    break;
+                }
+            }
         }
     }
     
-    // Move to desired x position (with safety limits)
-    int target_x = x_pos;
-    int move_attempts = 0;
-    while (current_piece->x < target_x && movePiece(1, 0) && move_attempts < WIDTH * 2) {
-        move_attempts++;
-    }
-    move_attempts = 0;
-    while (current_piece->x > target_x && movePiece(-1, 0) && move_attempts < WIDTH * 2) {
-        move_attempts++;
-    }
-    
-    // Hard drop
     hardDrop();
+    last_fall_time = std::chrono::steady_clock::now();
 }
 
 std::vector<std::vector<int>> TetrisGame::simulatePlacePiece(const TetrisPiece& piece, int drop_y) const {
@@ -709,13 +734,6 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         }
         // Calculate adaptive decay rate based on score
         double decay_rate = agent->epsilon_decay;
-        if (agent->average_score < 100.0) {
-            decay_rate = 0.99995;  // Very slow
-        } else if (agent->average_score < 200.0) {
-            decay_rate = 0.9999;  // Slow
-        } else if (agent->average_score < 500.0) {
-            decay_rate = 0.99975;  // Moderate
-        }
         
         snprintf(epsilon_track_str1, sizeof(epsilon_track_str1),
                 "Epsilon-Score: Avg=%.0f Eps=%.3f %s | Decay=%.5f",
@@ -1071,9 +1089,198 @@ void drawScoreGraph(RLAgent* agent) {
     mvaddstr(graph_y + graph_height + 2, graph_x + graph_width / 2 - 5, "Time (games)");
 }
 
+static double computePlacementReward(const TetrisGame& game, int lines_before,
+                                     int holes_before, int agg_before) {
+    double reward = 1.0;  // Survived another piece
+    int lines_diff = game.lines_cleared - lines_before;
+    if (lines_diff > 0) {
+        reward += lines_diff * 12.0;
+        if (lines_diff > 1) reward += (lines_diff - 1) * 6.0;
+        if (lines_diff >= 4) reward += 20.0;
+    }
+    
+    int holes_after = game.countHoles(game.board);
+    reward -= (holes_after - holes_before) * 5.0;
+    
+    int agg_after = game.getAggregateHeight(game.board);
+    reward -= (agg_after - agg_before) * 0.2;
+    
+    int max_height = 0;
+    for (int x = 0; x < game.WIDTH; x++) {
+        max_height = std::max(max_height, game.getColumnHeight(x, game.board));
+    }
+    if (max_height > 15) {
+        reward -= (max_height - 15) * 1.5;
+    }
+    
+    if (game.game_over) {
+        reward -= 40.0;
+    }
+    return reward;
+}
+
+static void recordTrainingTransition(TetrisGame& game, RLAgent& agent,
+                                     std::vector<double>& pending_state, bool& has_pending,
+                                     int lines_before, int holes_before, int agg_before) {
+    if (!game.training_mode) return;
+    
+    double reward = computePlacementReward(game, lines_before, holes_before, agg_before);
+    std::vector<double> next_state(NeuralNetwork::INPUT_SIZE, 0.0);
+    if (!game.game_over) {
+        next_state = agent.extractState(game);
+    }
+    
+    if (has_pending && !pending_state.empty()) {
+        Experience exp;
+        exp.state = pending_state;
+        exp.action_rotation = 0;
+        exp.action_x = 0;
+        exp.reward = reward;
+        exp.next_state = next_state;
+        exp.done = game.game_over;
+        agent.addExperience(exp);
+        
+        if (agent.replay_buffer.size() >= RLAgent::BATCH_SIZE) {
+            agent.train();
+            if (game.game_over) {
+                agent.train();
+            }
+        }
+    }
+    
+    if (!game.game_over) {
+        pending_state = next_state;
+        has_pending = true;
+    } else {
+        pending_state.clear();
+        has_pending = false;
+    }
+    
+    game.last_score = game.score;
+    game.last_lines = game.lines_cleared;
+}
+
+static void playAITurn(TetrisGame& game, RLAgent& agent,
+                       std::vector<double>& pending_state, bool& has_pending) {
+    if (game.current_piece == nullptr || game.game_over || game.paused) return;
+    
+    int lines_before = game.lines_cleared;
+    int holes_before = game.countHoles(game.board);
+    int agg_before = game.getAggregateHeight(game.board);
+    
+    RLAgent::Move best_move = agent.findBestMove(game, game.training_mode);
+    game.executeAIMove(best_move.rotation, best_move.x);
+    recordTrainingTransition(game, agent, pending_state, has_pending,
+                             lines_before, holes_before, agg_before);
+}
+
+static void finishEpisode(TetrisGame& game, RLAgent& agent, ParameterTuner* tuner) {
+    agent.total_games++;
+    bool new_best = game.score > agent.best_score;
+    if (new_best) {
+        agent.best_score = game.score;
+        agent.games_since_best_improvement = 0;
+        agent.saveBestModelIfBetter(game.score);
+    } else {
+        agent.games_since_best_improvement++;
+    }
+    
+    agent.recent_scores_sum += game.score;
+    agent.recent_scores.push_back(game.score);
+    if (agent.recent_scores.size() > RLAgent::CONVERGENCE_WINDOW) {
+        agent.recent_scores.pop_front();
+    }
+    
+    score_history.push_back(game.score);
+    if (score_history.size() > MAX_HISTORY) {
+        score_history.pop_front();
+    }
+    
+    if (agent.recent_scores.size() > 0) {
+        int window_size = std::min((int)agent.recent_scores.size(), RLAgent::RECENT_SCORES_COUNT);
+        double sum = 0.0;
+        int start_idx = std::max(0, (int)agent.recent_scores.size() - window_size);
+        for (int i = start_idx; i < (int)agent.recent_scores.size(); i++) {
+            sum += agent.recent_scores[i];
+        }
+        agent.average_score = sum / window_size;
+    } else {
+        agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
+    }
+    
+    if (tuner != nullptr) {
+        tuner->recordScore(game.score);
+    }
+    agent.updateEpsilonBasedOnPerformance();
+    
+    if (agent.total_games % 25 == 0) {
+        agent.saveModel();
+    }
+}
+
+static int runHeadlessTraining(RLAgent& agent, int max_games, bool fresh_model) {
+    (void)fresh_model;
+    TetrisGame game;
+    game.training_mode = true;
+    game.ai_enabled = true;
+    
+    std::vector<double> pending_state = agent.extractState(game);
+    bool has_pending = true;
+    
+    std::cout << "Headless training: " << max_games << " games"
+              << (agent.model_loaded ? " (loaded model)" : " (fresh network)") << "\n";
+    std::cout << std::unitbuf;
+    
+    int games_this_run = 0;
+    while (games_this_run < max_games) {
+        if (game.current_piece == nullptr && !game.game_over) {
+            game.spawnPiece();
+        }
+        if (!game.game_over) {
+            playAITurn(game, agent, pending_state, has_pending);
+        }
+        
+        if (game.game_over) {
+            int game_score = game.score;
+            int game_lines = game.lines_cleared;
+            finishEpisode(game, agent, nullptr);
+            games_this_run++;
+            
+            if (games_this_run % 10 == 0 || game_score == agent.best_score) {
+                std::cout << "Game " << games_this_run
+                          << "  score=" << game_score
+                          << "  lines=" << game_lines
+                          << "  best=" << agent.best_score
+                          << "  avg=" << (int)agent.average_score
+                          << "  eps=" << agent.epsilon
+                          << "  buf=" << agent.replay_buffer.size()
+                          << "\n";
+            }
+            
+            game.reset();
+            game.training_mode = true;
+            game.ai_enabled = true;
+            pending_state = agent.extractState(game);
+            has_pending = true;
+        }
+    }
+    
+    agent.saveModel();
+    if (agent.best_score > 0) {
+        agent.saveBestModelWithDate();
+    }
+    std::cout << "Training complete. Games=" << agent.total_games
+              << " Best=" << agent.best_score
+              << " Avg=" << agent.average_score << "\n";
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     // Parse command line arguments (before ncurses initialization)
     std::string model_file = "tetris_model.txt";
+    bool headless = false;
+    bool fresh_model = false;
+    int headless_games = 200;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--model" || arg == "-m") {
@@ -1081,7 +1288,18 @@ int main(int argc, char* argv[]) {
                 model_file = argv[++i];
             } else {
                 std::cerr << "Error: --model requires a filename\n";
-                std::cerr << "Usage: " << argv[0] << " [--model|-m <filename>] [--help|-h]\n";
+                std::cerr << "Usage: " << argv[0] << " [--model|-m <filename>] [--headless] [--games N] [--fresh] [--help|-h]\n";
+                return 1;
+            }
+        } else if (arg == "--headless" || arg == "--train") {
+            headless = true;
+        } else if (arg == "--fresh") {
+            fresh_model = true;
+        } else if (arg == "--games") {
+            if (i + 1 < argc) {
+                headless_games = std::max(1, atoi(argv[++i]));
+            } else {
+                std::cerr << "Error: --games requires a number\n";
                 return 1;
             }
         } else if (arg == "--help" || arg == "-h") {
@@ -1091,11 +1309,14 @@ int main(int argc, char* argv[]) {
             std::cout << "Options:\n";
             std::cout << "  --model, -m <filename>  Load neural network model from specified file\n";
             std::cout << "                          (default: tetris_model.txt)\n";
+            std::cout << "  --headless, --train     Train without the terminal UI (much faster)\n";
+            std::cout << "  --games <N>             Number of headless games (default: 200)\n";
+            std::cout << "  --fresh                 Ignore any existing model and train from scratch\n";
             std::cout << "  --help, -h              Show this help message\n\n";
             std::cout << "Examples:\n";
-            std::cout << "  " << argv[0] << "                    # Use default model (tetris_model.txt)\n";
-            std::cout << "  " << argv[0] << " -m tetris_model_best.txt  # Load best model\n";
-            std::cout << "  " << argv[0] << " --help              # Show this help\n\n";
+            std::cout << "  " << argv[0] << "                    # Play / train in the terminal UI\n";
+            std::cout << "  " << argv[0] << " --headless --games 500 --fresh\n";
+            std::cout << "  " << argv[0] << " -m tetris_model_best.txt\n\n";
             std::cout << "Controls:\n";
             std::cout << "  Left/Right Arrow  - Move piece left/right\n";
             std::cout << "  Up Arrow          - Rotate piece\n";
@@ -1113,6 +1334,16 @@ int main(int argc, char* argv[]) {
     // Initialize random seed
     srand(time(nullptr));
     
+    if (fresh_model) {
+        ::remove(model_file.c_str());
+    }
+    
+    RLAgent agent(model_file);
+    
+    if (headless) {
+        return runHeadlessTraining(agent, headless_games, fresh_model);
+    }
+    
     // Setup ncurses
     initscr();
     curs_set(0);      // Hide cursor
@@ -1123,25 +1354,14 @@ int main(int argc, char* argv[]) {
     initColors();
     
     TetrisGame game;
-    RLAgent agent(model_file);  // Load from specified model file
     ParameterTuner tuner;
-    
-    // Save best model with date and max score on program start
-    if (agent.best_score > 0) {
-        agent.saveBestModelWithDate();
-    }
     
     // Auto-start in training mode for continuous learning
     game.training_mode = true;
     game.ai_enabled = true;
     
-    // Apply initial parameter set
-    ParameterSet initial_params = tuner.getNextParameterSet();
-    tuner.applyParameters(initial_params, agent);
-    
-    std::vector<double> last_state;
-    int last_action_rot = 0;
-    int last_action_x = 0;
+    std::vector<double> pending_state = agent.extractState(game);
+    bool has_pending = true;
     
     // Game loop with debugging
     int loop_count = 0;
@@ -1225,239 +1445,40 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // RL Agent logic
+        // RL Agent logic: AI chooses a placement; gravity is disabled while AI is on.
         if (game.ai_enabled && !game.game_over && !game.paused && game.current_piece != nullptr) {
             auto current_time = std::chrono::steady_clock::now();
             auto ai_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 current_time - game.last_ai_time).count();
-            
-            // Execute AI move every 100ms (with timeout protection)
-            if (ai_elapsed >= 100) {
-                // Safety: Limit AI computation time to prevent CPU spinning
-                auto ai_start_time = std::chrono::steady_clock::now();
-                
-                // Extract current state
-                std::vector<double> current_state = agent.extractState(game);
-                
-                // Find best move (with timeout check)
-                RLAgent::Move best_move = agent.findBestMove(game, game.training_mode);
-                
-                // Check if AI computation took too long
-                auto ai_compute_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - ai_start_time).count();
-                if (ai_compute_time > 1000) {
-                    // AI computation took more than 1 second - skip this move to prevent CPU spinning
-                    game.last_ai_time = current_time;
-                    continue;
+            int ai_delay_ms = game.training_mode ? 20 : 80;
+            if (ai_elapsed >= ai_delay_ms) {
+                playAITurn(game, agent, pending_state, has_pending);
+                if (game.training_mode && agent.training_episodes > 0) {
+                    tuner.recordError(agent.last_batch_error);
+                    tuner.recordEpsilon(agent.epsilon);
                 }
-                
-                game.executeAIMove(best_move.rotation, best_move.x);
-                
-                // Collect experience for training
-                if (game.training_mode && last_state.size() > 0) {
-                    // SIMPLIFIED REWARD STRUCTURE - Focus on core objectives
-                    double reward = 0.0;
-                    
-                    // PRIMARY OBJECTIVE: Clear lines (main goal of Tetris)
-                    int lines_diff = game.lines_cleared - game.last_lines;
-                    reward += lines_diff * 15.0;  // IMPROVED: Increased from 10.0 to 15.0 for better emphasis (Priority 3)
-                    
-                    // Combo bonus: Extra reward for clearing multiple lines at once
-                    if (lines_diff > 1) {
-                        reward += lines_diff * 5.0;  // Bonus for combos (2+ lines)
-                    }
-                    
-                    // SECONDARY OBJECTIVE: Survival (stay alive)
-                    // FIX: Increased survival bonus to make most moves positive
-                    if (!game.game_over) {
-                        reward += 5.0;  // IMPROVED: Increased from 1.0 to 5.0 to make moves positive
-                    }
-                    
-                    // CRITICAL: Game over penalty (avoid at all costs)
-                    if (game.game_over) {
-                        reward -= 100.0;  // Strong but not overwhelming penalty
-                    }
-                    
-                    // STATE QUALITY: Normalized penalties (not overwhelming)
-                    // Height penalty (encourage keeping board low)
-                    int max_height = 0;
-                    std::vector<int> column_heights(game.WIDTH);
-                    for (int x = 0; x < game.WIDTH; x++) {
-                        int h = game.getColumnHeight(x, game.board);
-                        column_heights[x] = h;
-                        if (h > max_height) max_height = h;
-                    }
-                    // FIX: Reduced height penalty to prevent all moves being negative
-                    reward -= max_height * 0.1;  // IMPROVED: Reduced from 0.2 to 0.1
-                    
-                    // Well depth reward (encourage creating wells for I-piece strategy)
-                    int deepest_well = 0;
-                    for (int x = 0; x < game.WIDTH; x++) {
-                        int left_height = (x > 0) ? column_heights[x-1] : column_heights[x];
-                        int right_height = (x < game.WIDTH-1) ? column_heights[x+1] : column_heights[x];
-                        int well_depth = std::max(left_height, right_height) - column_heights[x];
-                        deepest_well = std::max(deepest_well, well_depth);
-                    }
-                    reward += deepest_well * 0.3;  // Reward for creating wells (helps I-piece placement)
-                    
-                    // Holes penalty (encourage avoiding holes)
-                    // FIX: Reduced holes penalty to prevent all moves being negative
-                    int holes = game.countHoles(game.board);
-                    reward -= holes * 0.2;  // IMPROVED: Reduced from 0.5 to 0.2
-                    
-                    // Store experience
-                    Experience exp;
-                    exp.state = last_state;
-                    exp.action_rotation = last_action_rot;
-                    exp.action_x = last_action_x;
-                    exp.reward = reward;
-                    exp.next_state = current_state;
-                    exp.done = game.game_over;
-                    
-                    agent.addExperience(exp);
-                    
-                    // Train periodically
-                    if (agent.replay_buffer.size() >= RLAgent::BATCH_SIZE) {
-                        auto train_start = std::chrono::steady_clock::now();
-                        agent.train();
-                        auto train_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - train_start).count();
-                        if (train_time > 500) {
-                            std::stringstream ss;
-                            ss << "Slow training: " << train_time << "ms";
-                            debugLog(ss.str());
-                        }
-                        
-                        // Record metrics for parameter tuning
-                        tuner.recordError(agent.last_batch_error);
-                        tuner.recordEpsilon(agent.epsilon);
-                        
-                        // Check if we should test new parameters
-                        if (tuner.shouldTestNewParameters()) {
-                            debugLog("Testing new parameter set");
-                            ParameterSet new_params = tuner.getNextParameterSet();
-                            tuner.applyParameters(new_params, agent);
-                            tuner.resetForNewParameters();
-                            
-                            // Log parameter change
-                            std::ofstream logfile("debug.log", std::ios::app);
-                            if (logfile.is_open()) {
-                                logfile << "[TUNER] Switched to new parameters: LR=" << new_params.learning_rate
-                                        << " Gamma=" << new_params.gamma
-                                        << " EpsDecay=" << new_params.epsilon_decay
-                                        << " EpsMin=" << new_params.epsilon_min << std::endl;
-                            }
-                        }
-                    }
-                }
-                
-                // Update last state/action
-                last_state = current_state;
-                last_action_rot = best_move.rotation;
-                last_action_x = best_move.x;
-                game.last_score = game.score;
-                game.last_lines = game.lines_cleared;
-                
                 game.last_ai_time = current_time;
-                
-                // Auto-restart in training mode (handled in main loop)
-            }
-        }
-        
-        // Check for convergence periodically (every 50 games)
-        if (game.training_mode && agent.total_games > 0 && agent.total_games % 50 == 0) {
-            if (agent.checkConvergence()) {
-                std::cout << "\nNetwork has converged! Saving model and exiting..." << std::endl;
-                agent.saveModel();
-                std::cout << "Model saved. Exiting..." << std::endl;
-                break;  // Exit main loop
             }
         }
         
         // Auto-restart in training mode when game over
         if (game.training_mode && game.game_over) {
             debugLog("Game over - restarting");
-            // Update training statistics
-            agent.total_games++;
-            if (game.score > agent.best_score) {
-                agent.best_score = game.score;
-                
-                // Save best model only if it's better than existing best, with timestamp and score in filename
-                agent.saveBestModelIfBetter(game.score);
-                
-                debugLog("New best score! Checking if model should be saved...");
-            }
-            
-            // Update running average (simple moving average of last N games)
-            agent.recent_scores_sum += game.score;
-            
-            // Track recent scores for convergence detection
-            agent.recent_scores.push_back(game.score);
-            if (agent.recent_scores.size() > RLAgent::CONVERGENCE_WINDOW) {
-                agent.recent_scores.pop_front();
-            }
-            
-            // Track scores for graph display
-            score_history.push_back(game.score);
-            if (score_history.size() > MAX_HISTORY) {
-                score_history.pop_front();
-            }
-            
-            // Track best score improvement
-            if (game.score > agent.best_score) {
-                agent.games_since_best_improvement = 0;
-            } else {
-                agent.games_since_best_improvement++;
-            }
-            
-            // Use sliding window average for more responsive updates
-            // Calculate average of recent scores (last RECENT_SCORES_COUNT games)
-            if (agent.recent_scores.size() > 0) {
-                int window_size = std::min((int)agent.recent_scores.size(), RLAgent::RECENT_SCORES_COUNT);
-                double sum = 0.0;
-                // Sum last N scores
-                int start_idx = std::max(0, (int)agent.recent_scores.size() - window_size);
-                for (int i = start_idx; i < (int)agent.recent_scores.size(); i++) {
-                    sum += agent.recent_scores[i];
-                }
-                agent.average_score = sum / window_size;
-            } else {
-                // Fallback: simple average if no recent scores yet
-                agent.average_score = agent.recent_scores_sum / (double)agent.total_games;
-            }
-            
-            // Record score for parameter tuning
-            tuner.recordScore(game.score);
-            
-            // Update epsilon based on performance (adaptive decay)
-            agent.updateEpsilonBasedOnPerformance();
-            
-            // Save model periodically
-            if (agent.training_episodes % 100 == 0) {
-                agent.saveModel();
-            }
-            
-            // Reset game immediately
-            game.~TetrisGame();
-            new (&game) TetrisGame();
-            game.training_mode = true;
-            game.ai_enabled = true;
-            last_state.clear();
-            
-            // Small delay to show game over briefly and allow screen refresh
-            napms(100);
-            
-            // Reset previous states after restart
+            finishEpisode(game, agent, &tuner);
+            game.reset();
+            pending_state = agent.extractState(game);
+            has_pending = true;
+            napms(80);
             prev_score_global = -1;
             prev_lines_global = -1;
             prev_level_global = -1;
             prev_game_over_global = false;
             prev_paused_global = false;
-            attrset(0);  // Reset attributes
+            attrset(0);
         }
         
-        // Update game (only if not game over in training mode, as we'll restart immediately)
-        if (!(game.training_mode && game.game_over)) {
+        // Gravity only for human play. AI places pieces immediately.
+        if (!game.ai_enabled && !(game.training_mode && game.game_over)) {
             game.update();
         }
         

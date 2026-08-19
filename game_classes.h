@@ -51,6 +51,7 @@ public:
     TetrisGame& operator=(const TetrisGame&) = delete;
     
     // Game control methods
+    void reset();
     void spawnPiece();
     void placePiece();
     int clearLines();

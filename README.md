@@ -112,6 +112,21 @@ The game includes a Reinforcement Learning (RL) agent that can learn to play Tet
 - **A** : Toggle AI on/off
 - **T** : Toggle training mode on/off
 
+### Fast Headless Training
+
+Train without the terminal UI (much faster):
+
+```bash
+./tetris --headless --games 500 --fresh
+```
+
+- `--headless` / `--train` : run games as fast as possible with no ncurses display
+- `--games N` : number of games (default 200)
+- `--fresh` : ignore any existing `tetris_model.txt` and start from random weights
+- `--model file` : load a specific model file
+
+The agent evaluates every legal placement with a Tetris board heuristic plus a learned neural after-state value, then improves that value with TD learning.
+
 ### Training Features
 
 - **Automatic Training**: The game starts in training mode by default

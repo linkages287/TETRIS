@@ -10,7 +10,7 @@ ParameterTuner::ParameterTuner()
     : current_iteration(0),
       last_evaluation_iteration(0),
       current_param_set_index(0),
-      auto_tuning_enabled(true) {
+      auto_tuning_enabled(false) {
     
     // Define parameter sets to test (grid search approach)
     // Format: (learning_rate, gamma, epsilon_decay, epsilon_min, batch_size)

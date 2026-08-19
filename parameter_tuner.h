@@ -48,7 +48,7 @@ public:
     
     std::vector<ParameterSet> parameter_sets;  // Different parameter combinations to try
     int current_param_set_index;
-    bool auto_tuning_enabled;
+    bool auto_tuning_enabled;  // Off by default: cycling hyperparameters prevents learning
     
     ParameterTuner();
     

@@ -27,9 +27,10 @@ public:
     std::vector<std::vector<double>> weights2;  // Hidden to output
     std::vector<double> bias2;                  // Output bias
     
-        static const int INPUT_SIZE = 27;   // ZERO-BASED REDESIGN: 10 heights + 3 board_quality + 7 current + 7 next + 2 game_state
+    // After-state features: 10 column heights + 3 board quality + 7 upcoming piece + 7 reserved
+    static const int INPUT_SIZE = 27;
     static const int HIDDEN_SIZE = 64;
-    static const int OUTPUT_SIZE = 1;  // Q-value
+    static const int OUTPUT_SIZE = 1;  // After-state value
     
     NeuralNetwork();
     double relu(double x) const;
@@ -68,6 +69,7 @@ public:
     double epsilon_decay;
     double learning_rate;
     double gamma;             // Discount factor
+    double heuristic_weight;  // Blend of Dellacherie-style heuristic with the network
     
         int training_episodes;
         int total_games;
@@ -113,15 +115,20 @@ public:
     
     RLAgent(const std::string& model_file = "tetris_model.txt");  // Allow custom model file
     
-    // Extract state features from game
+    // After-state features from the live game (board + current/upcoming piece)
     std::vector<double> extractState(const TetrisGame& game);
     
-    // Extract state features from simulated board (helper for findBestMove)
+    // After-state features from a simulated board. upcoming_piece is the piece
+    // that will be placed next from this after-state.
     std::vector<double> extractStateFromBoard(const std::vector<std::vector<int>>& sim_board, 
                                               int lines_cleared, int level, 
-                                              const TetrisPiece* next_piece) const;
+                                              const TetrisPiece* upcoming_piece) const;
     
-    // Find best move using Q-learning
+    // Classic Tetris board evaluation (holes, wells, transitions, height)
+    double boardHeuristic(const std::vector<std::vector<int>>& sim_board,
+                          int lines_cleared, int landing_height = 0) const;
+    
+    // Find best placement using heuristic + learned after-state value
     Move findBestMove(const TetrisGame& game, bool training = false);
     
     // Experience replay
