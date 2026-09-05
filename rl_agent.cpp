@@ -12,6 +12,7 @@
 #include <deque>
 #include <dirent.h>
 #include <cstring>
+#include <limits>
 
 // Neural Network Implementation
 NeuralNetwork::NeuralNetwork() {
@@ -110,13 +111,10 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
         output += hidden[i] * weights2[i][0];
     }
     
-    // FIX: Reduced clipping limits to prevent gradient explosion
-    const double MAX_ERROR = 25.0;      // Reduced from 50.0 to prevent extreme errors
-    const double MAX_GRADIENT = 5.0;    // Reduced from 10.0 to prevent gradient explosion
-    // FIX: Reduced weight limits to prevent saturation and weight explosion
-    // Current model has bias2/weights2/bias1 hitting limits at 27.0/-27.0
-    const double MAX_WEIGHT = 25.0;     // FIX: Reduced from 30.0 to 25.0 (weights still hitting limits)
-    const double MIN_WEIGHT = -25.0;    // FIX: Reduced from -30.0 to -25.0 to match MAX_WEIGHT
+    const double MAX_ERROR = 25.0;
+    const double MAX_GRADIENT = 5.0;
+    const double MAX_WEIGHT = 10.0;
+    const double MIN_WEIGHT = -10.0;
     
     double error = target - output;
     
@@ -135,39 +133,16 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
         weight_gradient = std::max(-MAX_GRADIENT, std::min(MAX_GRADIENT, weight_gradient));
         
         weights2[i][0] += learning_rate * weight_gradient;
-        
-        // Clip weights to prevent explosion (new: explicit weight clipping)
         weights2[i][0] = std::max(MIN_WEIGHT, std::min(MAX_WEIGHT, weights2[i][0]));
-        
-        // FIX: More aggressive clipping for weights2 - clip at 80% of limit to prevent saturation
-        if (weights2[i][0] > MAX_WEIGHT * 0.8) {
-            weights2[i][0] = MAX_WEIGHT * 0.8;  // Clip at 20.0 (80% of 25.0)
-        }
-        if (weights2[i][0] < MIN_WEIGHT * 0.8) {
-            weights2[i][0] = MIN_WEIGHT * 0.8;  // Clip at -20.0 (80% of -25.0)
-        }
-        
-        // Check for NaN/Inf and fix if needed
         if (!std::isfinite(weights2[i][0])) {
-            weights2[i][0] = 0.0;  // Reset to zero if invalid
+            weights2[i][0] = 0.0;
         }
     }
     
     // Clip output gradient for bias update
     double bias2_gradient = std::max(-MAX_GRADIENT, std::min(MAX_GRADIENT, output_gradient));
     bias2[0] += learning_rate * bias2_gradient;
-    
-    // Clip bias to prevent explosion (new: explicit bias clipping)
     bias2[0] = std::max(MIN_WEIGHT, std::min(MAX_WEIGHT, bias2[0]));
-    
-    // FIX: More aggressive clipping for bias2 - clip at 80% of limit to prevent saturation
-    if (bias2[0] > MAX_WEIGHT * 0.8) {
-        bias2[0] = MAX_WEIGHT * 0.8;  // Clip at 20.0 (80% of 25.0)
-    }
-    if (bias2[0] < MIN_WEIGHT * 0.8) {
-        bias2[0] = MIN_WEIGHT * 0.8;  // Clip at -20.0 (80% of -25.0)
-    }
-    
     if (!std::isfinite(bias2[0])) {
         bias2[0] = 0.0;
     }
@@ -193,13 +168,9 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
             weight_gradient = std::max(-MAX_GRADIENT, std::min(MAX_GRADIENT, weight_gradient));
             
             weights1[j][i] += learning_rate * weight_gradient;
-            
-            // Clip weights to prevent explosion (new: explicit weight clipping)
             weights1[j][i] = std::max(MIN_WEIGHT, std::min(MAX_WEIGHT, weights1[j][i]));
-            
-            // Check for NaN/Inf and fix if needed
             if (!std::isfinite(weights1[j][i])) {
-                weights1[j][i] = 0.0;  // Reset to zero if invalid
+                weights1[j][i] = 0.0;
             }
         }
         
@@ -208,21 +179,9 @@ void NeuralNetwork::update(const std::vector<double>& input, double target, doub
         bias_gradient = std::max(-MAX_GRADIENT, std::min(MAX_GRADIENT, bias_gradient));
         
         bias1[i] += learning_rate * bias_gradient;
-        
-        // Clip bias to prevent explosion (new: explicit bias clipping)
         bias1[i] = std::max(MIN_WEIGHT, std::min(MAX_WEIGHT, bias1[i]));
-        
-        // FIX: Additional aggressive clipping for bias1 - clip at 80% of limit to prevent saturation
-        if (bias1[i] > MAX_WEIGHT * 0.8) {  // Clip at 20.0 (80% of 25.0)
-            bias1[i] = MAX_WEIGHT * 0.8;
-        }
-        if (bias1[i] < MIN_WEIGHT * 0.8) {  // Clip at -20.0 (80% of -25.0)
-            bias1[i] = MIN_WEIGHT * 0.8;
-        }
-        
-        // Check for NaN/Inf and fix if needed
         if (!std::isfinite(bias1[i])) {
-            bias1[i] = 0.0;  // Reset to zero if invalid
+            bias1[i] = 0.0;
         }
     }
     if (!std::isfinite(bias2[0])) {
@@ -304,76 +263,32 @@ bool NeuralNetwork::load(const std::string& filename) {
     for (auto& row : weights1) {
         for (double& w : row) {
             if (!(file >> w)) return false;
-            // FIX: Clip weights1 to valid range during load to fix corrupted models
-            // FIX: Reduced limits to match new MAX_WEIGHT (25.0)
-            w = std::max(-25.0, std::min(25.0, w));
-            // FIX: More aggressive clipping on load - clip at 80% of limit
-            if (w > 25.0 * 0.8) {
-                w = 25.0 * 0.8;  // Clip at 20.0 (80% of 25.0)
-            }
-            if (w < -25.0 * 0.8) {
-                w = -25.0 * 0.8;  // Clip at -20.0 (80% of -25.0)
-            }
+            if (!std::isfinite(w)) w = 0.0;
+            w = std::max(-10.0, std::min(10.0, w));
         }
     }
     
     // Load bias1
     for (double& b : bias1) {
         if (!(file >> b)) return false;
-        // FIX: Clip bias1 to valid range during load to fix corrupted models
-        // FIX: Reduced limits to match new MAX_WEIGHT (25.0)
-        b = std::max(-25.0, std::min(25.0, b));
-        // FIX: More aggressive clipping on load - clip at 80% of limit
-        if (b > 25.0 * 0.8) {
-            b = 25.0 * 0.8;  // Clip at 20.0 (80% of 25.0)
-        }
-        if (b < -25.0 * 0.8) {
-            b = -25.0 * 0.8;  // Clip at -20.0 (80% of -25.0)
-        }
-        // FIX: If bias1 was stuck at old limit, reduce it further
-        if (b > 26.0 || b < -26.0) {
-            b = b * 0.75;  // Reduce by 25% if it was stuck at old limit
-        }
+        if (!std::isfinite(b)) b = 0.0;
+        b = std::max(-10.0, std::min(10.0, b));
     }
     
     // Load weights2
     for (auto& row : weights2) {
         for (double& w : row) {
             if (!(file >> w)) return false;
-            // FIX: Clip weights2 to valid range during load to fix corrupted models
-            // FIX: Reduced limits to match new MAX_WEIGHT (25.0)
-            w = std::max(-25.0, std::min(25.0, w));
-            // FIX: More aggressive clipping on load - clip at 80% of limit and reduce stuck weights
-            if (w > 25.0 * 0.8) {
-                w = 25.0 * 0.8;  // Clip at 20.0 (80% of 25.0)
-            }
-            if (w < -25.0 * 0.8) {
-                w = -25.0 * 0.8;  // Clip at -20.0 (80% of -25.0)
-            }
-            // FIX: If weight was stuck at old limit, reduce it further
-            if (w > 26.0 || w < -26.0) {
-                w = w * 0.75;  // Reduce by 25% if it was stuck at old limit
-            }
+            if (!std::isfinite(w)) w = 0.0;
+            w = std::max(-10.0, std::min(10.0, w));
         }
     }
     
     // Load bias2
     for (double& b : bias2) {
         if (!(file >> b)) return false;
-            // FIX: Clip bias2 to valid range during load to fix corrupted models
-            // FIX: Reduced limits to match new MAX_WEIGHT (25.0)
-            b = std::max(-25.0, std::min(25.0, b));
-            // FIX: More aggressive clipping on load - clip at 80% of limit and reduce stuck weights
-            if (b > 25.0 * 0.8) {
-                b = 25.0 * 0.8;  // Clip at 20.0 (80% of 25.0)
-            }
-            if (b < -25.0 * 0.8) {
-                b = -25.0 * 0.8;  // Clip at -20.0 (80% of -25.0)
-            }
-            // FIX: If bias2 was stuck at old limit, reduce it further
-            if (b > 26.0 || b < -26.0) {
-                b = b * 0.75;  // Reduce by 25% if it was stuck at old limit
-            }
+        if (!std::isfinite(b)) b = 0.0;
+        b = std::max(-10.0, std::min(10.0, b));
     }
     
     return true;
@@ -666,10 +581,11 @@ std::string NeuralNetwork::getWeightStatsString(int episode, double error, bool 
 // RL Agent Implementation
 RLAgent::RLAgent(const std::string& model_file) 
     : epsilon(1.0),
-    epsilon_min(0.15),        // FIX: Increased from 0.10 to 0.15 for better exploration (prevents premature convergence)
-    epsilon_decay(0.9995),    // Slow decay (reaches min in ~9000 games) - allows extensive exploration
-    learning_rate(0.001),     // FIX: Reduced from 0.002 to 0.001 (0.003 was too high, causing instability)
-    gamma(0.95),              // Standard discount factor (balances immediate and future rewards)
+    epsilon_min(0.08),
+    epsilon_decay(0.997),
+    learning_rate(0.001),
+    gamma(0.95),
+    heuristic_weight(6.0),
     training_episodes(0),
     total_games(0),
     best_score(0),
@@ -711,40 +627,13 @@ RLAgent::RLAgent(const std::string& model_file)
                     iss >> key;
                     
                     if (key == "EPSILON") {
-                        double loaded_epsilon;
-                        iss >> loaded_epsilon;
-                        // Store loaded epsilon, will be validated after epsilon_min is loaded
-                        epsilon = loaded_epsilon;
+                        iss >> epsilon;
                     } else if (key == "EPSILON_MIN") {
-                        double loaded_min;
-                        iss >> loaded_min;
-                        // FIX: Override if loaded epsilon_min is too low (prevents premature convergence)
-                        // If loaded min is less than 0.15, force to 0.15 for better exploration
-                        if (loaded_min < 0.15) {
-                            epsilon_min = 0.15;  // Force higher minimum for convergence
-                        } else {
-                            epsilon_min = loaded_min;
-                        }
+                        iss >> epsilon_min;
                     } else if (key == "EPSILON_DECAY") {
-                        double loaded_decay;
-                        iss >> loaded_decay;
-                        // FIX: Override if loaded decay is too fast (prevents convergence issues)
-                        // If loaded decay is faster than 0.999, force to 0.9995 for better exploration
-                        if (loaded_decay < 0.999) {
-                            epsilon_decay = 0.9995;  // Force slower decay for convergence
-                        } else {
-                            epsilon_decay = loaded_decay;
-                        }
+                        iss >> epsilon_decay;
                     } else if (key == "LEARNING_RATE") {
-                        double loaded_lr;
-                        iss >> loaded_lr;
-                        // FIX: Override if loaded learning rate is too high (prevents instability)
-                        // If loaded LR is > 0.0015, force to 0.001 for stability
-                        if (loaded_lr > 0.0015) {
-                            learning_rate = 0.001;  // Force lower learning rate for stability
-                        } else {
-                            learning_rate = loaded_lr;
-                        }
+                        iss >> learning_rate;
                     } else if (key == "GAMMA") {
                         iss >> gamma;
                     } else if (key == "TRAINING_EPISODES") {
@@ -762,38 +651,11 @@ RLAgent::RLAgent(const std::string& model_file)
             }
         }
         
-        // FIX: Reset epsilon if performance is poor OR if epsilon is below minimum (convergence issue)
-        // If average score is low and epsilon is at minimum, reset to allow exploration
-        // Also reset if epsilon is below the new epsilon_min (after override)
         if (epsilon < epsilon_min) {
-            // Epsilon below minimum - reset to allow exploration
-            epsilon = std::max(epsilon_min, std::min(0.5, epsilon_min * 3.0));  // Reset to 3x minimum or 0.5
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[MODEL LOAD] Epsilon reset: " << epsilon
-                        << " | Reason: Below minimum (" << epsilon_min << ")" << std::endl;
-            }
-        } else if (average_score > 0 && average_score < 400.0 && epsilon <= epsilon_min * 1.1 && total_games > 100) {
-            // Poor performance and epsilon at minimum - reset to allow exploration
-            epsilon = std::min(0.5, epsilon_min * 3.0);  // Reset to 3x minimum for exploration
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[MODEL LOAD] Epsilon reset due to poor performance: " << epsilon
-                        << " | Avg Score: " << average_score << " | Games: " << total_games << std::endl;
-            }
-        } else if (average_score >= 400.0 && epsilon <= epsilon_min * 1.1 && total_games > 50) {
-            // Good performance but epsilon at minimum - reset to allow continued exploration for improvement
-            epsilon = std::min(0.3, epsilon_min * 2.0);  // Reset to 2x minimum (0.30) for continued exploration
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[MODEL LOAD] Epsilon reset for continued exploration: " << epsilon
-                        << " | Avg Score: " << average_score << " | Games: " << total_games << std::endl;
-            }
+            epsilon = epsilon_min;
         }
-        
-        // If no metadata found, use default epsilon for continued training
         if (training_episodes == 0 && total_games == 0) {
-            epsilon = 0.3;  // Start at 30% exploration for continued learning
+            epsilon = 0.25;
         }
         
         // Log successful model load (will be written to debug.log)
@@ -814,63 +676,20 @@ RLAgent::RLAgent(const std::string& model_file)
 }
 
 std::vector<double> RLAgent::extractState(const TetrisGame& game) {
-    // ZERO-BASED REDESIGN: Minimal essential features only (27 total)
-    std::vector<double> state(NeuralNetwork::INPUT_SIZE, 0.0);
-    int idx = 0;
-    
-    if (game.current_piece == nullptr) {
-        return state;
-    }
-    
-    // 1. Column Heights (10 features) - Essential spatial information
-    int max_height = 0;
-    for (int x = 0; x < game.WIDTH; x++) {
-        int height = game.getColumnHeight(x, game.board);
-        max_height = std::max(max_height, height);
-        state[idx++] = height / 20.0;  // Simple normalization [0, 1]
-    }
-    
-    // 2. Board Quality (3 features) - How bad is the board?
-    state[idx++] = max_height / 20.0;  // Max height [0, 1]
-    // FIX: Normalize holes properly - max possible holes = 10 columns × 20 rows = 200
-    int total_holes = game.countHoles(game.board);
-    state[idx++] = std::min(1.0, total_holes / 200.0);  // Total holes [0, 1]
-    // FIX: Normalize bumpiness properly - max possible = 9 gaps × 20 height diff = 180
-    int total_bumpiness = game.calculateBumpiness(game.board);
-    state[idx++] = std::min(1.0, total_bumpiness / 180.0);  // Total bumpiness [0, 1]
-    
-    // 3. Current Piece (7 features) - One-hot encoding
-    for (int i = 0; i < 7; i++) {
-        state[idx++] = (game.current_piece->type == i) ? 1.0 : 0.0;
-    }
-    
-    // 4. Next Piece (7 features) - One-hot encoding
-    if (game.next_piece) {
-        for (int i = 0; i < 7; i++) {
-            state[idx++] = (game.next_piece->type == i) ? 1.0 : 0.0;
-        }
-    } else {
-        for (int i = 0; i < 7; i++) {
-            state[idx++] = 0.0;
-        }
-    }
-    
-    // Total: 10 + 3 + 7 + 7 = 27 features
-    // Removed lines/level - not needed for move selection
-    
-    return state;
+    // Live after-state: current board + the piece that will be placed next.
+    return extractStateFromBoard(game.board, game.lines_cleared, game.level, game.current_piece);
 }
 
 std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector<int>>& sim_board, 
                                                     int /*lines_cleared*/, int /*level*/, 
-                                                    const TetrisPiece* next_piece) const {
-    // ZERO-BASED REDESIGN: Minimal essential features only (27 total)
+                                                    const TetrisPiece* upcoming_piece) const {
+    // After-state: board quality + the upcoming piece in the current-piece slots.
+    // The last 7 features stay zero so evaluation and training use the same layout.
     std::vector<double> state(NeuralNetwork::INPUT_SIZE, 0.0);
     int idx = 0;
     const int WIDTH = TetrisGame::WIDTH;
     const int HEIGHT = TetrisGame::HEIGHT;
     
-    // 1. Column Heights (10 features) - Essential spatial information
     std::vector<int> column_heights(WIDTH);
     int max_height = 0;
     
@@ -884,13 +703,11 @@ std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector
         }
         column_heights[x] = height;
         max_height = std::max(max_height, height);
-        state[idx++] = height / 20.0;  // Simple normalization [0, 1]
+        state[idx++] = height / 20.0;
     }
     
-    // 2. Board Quality (3 features) - How bad is the board?
-    state[idx++] = max_height / 20.0;  // Max height [0, 1]
+    state[idx++] = max_height / 20.0;
     
-    // Calculate total holes
     int total_holes = 0;
     for (int x = 0; x < WIDTH; x++) {
         bool block_found = false;
@@ -902,179 +719,197 @@ std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector
             }
         }
     }
-    // FIX: Normalize holes properly - max possible holes = 10 columns × 20 rows = 200
-    state[idx++] = std::min(1.0, total_holes / 200.0);  // Total holes [0, 1]
+    state[idx++] = std::min(1.0, total_holes / 200.0);
     
-    // Calculate total bumpiness
     int total_bumpiness = 0;
     for (int x = 0; x < WIDTH - 1; x++) {
         total_bumpiness += std::abs(column_heights[x] - column_heights[x + 1]);
     }
-    // FIX: Normalize bumpiness properly - max possible = 9 gaps × 20 height diff = 180
-    state[idx++] = std::min(1.0, total_bumpiness / 180.0);  // Total bumpiness [0, 1]
+    state[idx++] = std::min(1.0, total_bumpiness / 180.0);
     
-    // 3. Current Piece (7 features) - None since piece is placed
+    for (int i = 0; i < 7; i++) {
+        state[idx++] = (upcoming_piece && upcoming_piece->type == i) ? 1.0 : 0.0;
+    }
     for (int i = 0; i < 7; i++) {
         state[idx++] = 0.0;
     }
     
-    // 4. Next Piece (7 features) - One-hot encoding
-    if (next_piece) {
-        for (int i = 0; i < 7; i++) {
-            state[idx++] = (next_piece->type == i) ? 1.0 : 0.0;
+    return state;
+}
+
+double RLAgent::boardHeuristic(const std::vector<std::vector<int>>& sim_board,
+                               int lines_cleared, int landing_height) const {
+    const int WIDTH = TetrisGame::WIDTH;
+    const int HEIGHT = TetrisGame::HEIGHT;
+    
+    int holes = 0;
+    int aggregate_height = 0;
+    int bumpiness = 0;
+    int wells = 0;
+    int row_trans = 0;
+    int col_trans = 0;
+    std::vector<int> heights(WIDTH, 0);
+    
+    for (int x = 0; x < WIDTH; x++) {
+        bool block_found = false;
+        int height = 0;
+        for (int y = 0; y < HEIGHT; y++) {
+            if (sim_board[y][x] != 0) {
+                if (!block_found) {
+                    height = HEIGHT - y;
+                    block_found = true;
+                }
+            } else if (block_found) {
+                holes++;
+            }
         }
-    } else {
-        for (int i = 0; i < 7; i++) {
-            state[idx++] = 0.0;
+        heights[x] = height;
+        aggregate_height += height;
+    }
+    
+    for (int x = 0; x < WIDTH - 1; x++) {
+        bumpiness += std::abs(heights[x] - heights[x + 1]);
+    }
+    
+    for (int y = 0; y < HEIGHT; y++) {
+        int prev = 1;
+        for (int x = 0; x < WIDTH; x++) {
+            int cell = (sim_board[y][x] != 0) ? 1 : 0;
+            if (cell != prev) row_trans++;
+            prev = cell;
+        }
+        if (prev != 1) row_trans++;
+    }
+    
+    for (int x = 0; x < WIDTH; x++) {
+        int prev = 0;
+        for (int y = 0; y < HEIGHT; y++) {
+            int cell = (sim_board[y][x] != 0) ? 1 : 0;
+            if (cell != prev) col_trans++;
+            prev = cell;
+        }
+        if (prev != 1) col_trans++;
+    }
+    
+    for (int x = 0; x < WIDTH; x++) {
+        int depth = 0;
+        for (int y = 0; y < HEIGHT; y++) {
+            if (sim_board[y][x] == 0) {
+                bool left_wall = (x == 0) || (sim_board[y][x - 1] != 0);
+                bool right_wall = (x == WIDTH - 1) || (sim_board[y][x + 1] != 0);
+                if (left_wall && right_wall) {
+                    depth++;
+                    wells += depth;
+                } else {
+                    depth = 0;
+                }
+            } else {
+                depth = 0;
+            }
         }
     }
     
-    // Total: 10 + 3 + 7 + 7 = 27 features
-    // Removed lines/level - not needed for move selection
-    
-    return state;
+    // El-Tetris-inspired weights: prefer line clears, punish holes/transitions/wells.
+    return lines_cleared * 3.4
+         - holes * 7.9
+         - wells * 3.4
+         - row_trans * 0.32
+         - col_trans * 0.90
+         - aggregate_height * 0.51
+         - landing_height * 0.45
+         - bumpiness * 0.18;
 }
 
 RLAgent::Move RLAgent::findBestMove(const TetrisGame& game, bool training) {
     if (game.current_piece == nullptr) {
-        return {0, 0, -999999};
+        return {0, 0, -1e9};
     }
     
-    Move best_move = {0, 0, -999999};
+    struct Placement {
+        int rotation;
+        int x;
+        int drop_y;
+        int lines;
+        std::vector<std::vector<int>> board;
+        double heuristic;
+        double value;
+    };
+    
+    std::vector<Placement> placements;
     TetrisPiece piece = *game.current_piece;
     
-    // Epsilon-greedy: explore or exploit
-    bool explore = training && (rand() / (double)RAND_MAX) < epsilon;
-    
-    if (explore) {
-        // Random exploration
-        int rot = rand() % 4;
-        int x = rand() % (game.WIDTH + 1) - 2;
-        return {rot, x, 0.0};
-    }
-    
-    // Exploit: find best Q-value with optimizations
-    int move_evaluations = 0;
-    const int MAX_EVALUATIONS = 300;  // Safety limit to prevent CPU spinning
-    const double EARLY_TERMINATION_THRESHOLD = 50.0;  // Reduced from 100.0 - stop if we find a good move (less aggressive)
-    
-    // Pre-calculate next piece encoding (used in all state extractions)
-    const TetrisPiece* next_piece = game.next_piece;
-    const int total_lines_cleared = game.lines_cleared;
-    const int current_level = game.level;
-    
-    // Generate move order: try center positions first (more likely to be good)
-    // Create ordered list of x positions: center outward, alternating left/right
-    // FIX: Alternate left/right to prevent bias towards one side
-    std::vector<int> x_positions;
-    int center = game.WIDTH / 2;
-    x_positions.push_back(center);  // Center first
-    for (int offset = 1; offset <= game.WIDTH + 2; offset++) {
-        // Alternate left/right to prevent bias
-        // Try right first on odd offsets, left first on even offsets
-        // This ensures both sides are checked equally at each distance
-        if (offset % 2 == 1) {
-            // Odd offset: try right first (balance left bias)
-            if (center + offset < game.WIDTH + 2) x_positions.push_back(center + offset);
-            if (center - offset >= -2) x_positions.push_back(center - offset);
-        } else {
-            // Even offset: try left first (balance right bias)
-            if (center - offset >= -2) x_positions.push_back(center - offset);
-            if (center + offset < game.WIDTH + 2) x_positions.push_back(center + offset);
-        }
-    }
-    
-    // Try rotations in order (0, 1, 2, 3) but could prioritize common ones
-    for (int rot = 0; rot < 4 && move_evaluations < MAX_EVALUATIONS; rot++) {
+    for (int rot = 0; rot < 4; rot++) {
         piece.rotation = rot;
-        
-        // Calculate piece bounds for this rotation to optimize position filtering
+        piece.x = 0;
+        piece.y = 0;
         std::vector<Point> blocks = piece.getBlocks();
-        int min_x = 0, max_x = 0;
-        if (!blocks.empty()) {
-            min_x = blocks[0].x;
-            max_x = blocks[0].x;
-            for (const auto& block : blocks) {
-                min_x = std::min(min_x, block.x);
-                max_x = std::max(max_x, block.x);
-            }
+        if (blocks.empty()) continue;
+        
+        int min_dx = blocks[0].x;
+        int max_dx = blocks[0].x;
+        for (const auto& block : blocks) {
+            min_dx = std::min(min_dx, block.x);
+            max_dx = std::max(max_dx, block.x);
         }
         
-        // Try positions in order (center outward)
-        for (size_t pos_idx = 0; pos_idx < x_positions.size() && move_evaluations < MAX_EVALUATIONS; pos_idx++) {
-            int x = x_positions[pos_idx];
-            
-            // Skip positions where piece would be completely off-board (optimized bounds check)
-            if (x + min_x < -2 || x + max_x >= game.WIDTH + 2) {
-                continue;
-            }
-            
+        for (int x = -min_dx; x <= game.WIDTH - 1 - max_dx; x++) {
             piece.x = x;
-            move_evaluations++;
             piece.y = 0;
-            
-            // Early collision check
             if (game.checkCollision(piece)) continue;
             
-            // Simulate drop (optimized with better bounds)
             int drop_y = 0;
-            int max_drop = game.HEIGHT + 10;  // Safety limit
-            while (!game.checkCollision(piece, 0, drop_y + 1) && drop_y < max_drop) {
+            while (!game.checkCollision(piece, 0, drop_y + 1) && drop_y < game.HEIGHT + 4) {
                 drop_y++;
             }
-            if (drop_y >= max_drop) {
-                // Safety: skip this move if drop calculation stuck
-                continue;
-            }
+            if (drop_y >= game.HEIGHT + 4) continue;
             
-            // Create next state
-            std::vector<std::vector<int>> sim_board = game.simulatePlacePiece(piece, piece.y + drop_y);
-            int lines_cleared = game.simulateClearLines(sim_board);
-            
-            // Relaxed heuristic filter: only skip moves that create excessive holes
-            // Let network learn hole avoidance naturally, but filter obviously terrible moves
-            int holes = game.countHoles(sim_board);
-            if (holes > 25 && total_lines_cleared < 30) {
-                // Only skip moves that create excessive holes (>25) very early game (<30 lines)
-                // This allows network to learn hole-avoidance strategies while filtering extreme cases
-                continue;
-            }
-            
-            // Extract state using optimized helper function
-            std::vector<double> next_state = extractStateFromBoard(
-                sim_board, total_lines_cleared + lines_cleared, current_level, next_piece);
-            
-            // Get Q-value from network
-            double q_value = q_network.forward(next_state);
-            
-            // Clip Q-value to prevent unbounded growth (new: Q-value clipping)
-            const double MAX_Q_VALUE_EVAL = 200.0;
-            const double MIN_Q_VALUE_EVAL = -200.0;
-            q_value = std::max(MIN_Q_VALUE_EVAL, std::min(MAX_Q_VALUE_EVAL, q_value));
-            
-            // Track best move
-            if (q_value > best_move.q_value) {
-                best_move.rotation = rot;
-                best_move.x = x;
-                best_move.q_value = q_value;
-                
-                // Early termination: if we find a very good move, stop searching
-                // FIX: Increased minimum evaluations to ensure both sides are checked
-                // This prevents bias towards one side due to early termination
-                if (q_value > EARLY_TERMINATION_THRESHOLD && move_evaluations > 20) {
-                    // Found a very good move and evaluated at least 20 moves
-                    // This ensures we've checked both left and right sides before terminating
-                    break;
-                }
+            Placement p;
+            p.rotation = rot;
+            p.x = x;
+            p.drop_y = drop_y;
+            p.board = game.simulatePlacePiece(piece, piece.y + drop_y);
+            p.lines = game.simulateClearLines(p.board);
+            int landing_height = game.HEIGHT - drop_y;
+            p.heuristic = boardHeuristic(p.board, p.lines, landing_height);
+            p.value = 0.0;
+            placements.push_back(std::move(p));
+        }
+    }
+    
+    if (placements.empty()) {
+        return {game.current_piece->rotation, game.current_piece->x, -1e9};
+    }
+    
+    bool explore = training && ((rand() / (double)RAND_MAX) < epsilon);
+    if (explore) {
+        // Mostly noisy-heuristic exploration so random play is not pure garbage.
+        if ((rand() / (double)RAND_MAX) < 0.25) {
+            const Placement& p = placements[rand() % placements.size()];
+            return {p.rotation, p.x, p.heuristic};
+        }
+        Move best = {placements[0].rotation, placements[0].x, -1e9};
+        for (const auto& p : placements) {
+            double noisy = p.heuristic + ((rand() / (double)RAND_MAX) - 0.5) * 8.0;
+            if (noisy > best.q_value) {
+                best.rotation = p.rotation;
+                best.x = p.x;
+                best.q_value = noisy;
             }
         }
-        
-        // Early termination check: if we found a very good move, stop trying other rotations
-        // FIX: Increased minimum evaluations to ensure both sides are checked across rotations
-        if (best_move.q_value > EARLY_TERMINATION_THRESHOLD && move_evaluations > 40) {
-            // Found a very good move and evaluated at least 40 moves
-            // This ensures we've checked both sides across multiple rotations before terminating
-            break;
+        return best;
+    }
+    
+    Move best_move = {placements[0].rotation, placements[0].x, -1e9};
+    for (auto& p : placements) {
+        std::vector<double> after_state = extractStateFromBoard(
+            p.board, 0, 0, game.next_piece);
+        double q_value = q_network.forward(after_state);
+        q_value = std::max(-200.0, std::min(200.0, q_value));
+        p.value = heuristic_weight * p.heuristic + q_value;
+        if (p.value > best_move.q_value) {
+            best_move.rotation = p.rotation;
+            best_move.x = p.x;
+            best_move.q_value = p.value;
         }
     }
     
@@ -1244,17 +1079,13 @@ void RLAgent::train() {
 }
 
 void RLAgent::updateEpsilonBasedOnPerformance() {
-    // COMPLETE REWRITE: Adaptive epsilon decay based on score performance
-    // Monitor score vs epsilon relationship to prevent premature exploitation
+    last_epsilon = epsilon;
     
-    // Track epsilon-score relationship
     if (total_games > 0 && average_score > 0) {
         epsilon_score_history.push_back({(int)average_score, epsilon});
         if (epsilon_score_history.size() > EPSILON_SCORE_HISTORY_SIZE) {
             epsilon_score_history.pop_front();
         }
-        
-        // Track epsilon at score milestones
         if (epsilon_at_score_100 < 0 && average_score >= 100) {
             epsilon_at_score_100 = epsilon;
         }
@@ -1266,285 +1097,15 @@ void RLAgent::updateEpsilonBasedOnPerformance() {
         }
     }
     
-    // FIX: Adaptive epsilon decay - slower when score is low or not improving
-    if (epsilon > epsilon_min && total_games > 0) {
-        // Base decay rate
-        double decay_rate = epsilon_decay;
-        
-        // Calculate improvement for decay rate adjustment
-        double improvement = average_score - previous_avg_score;
-        double improvement_percent = 0.0;
-        if (previous_avg_score > 1.0) {
-            improvement_percent = (improvement / previous_avg_score) * 100.0;
-        }
-        
-        // Calculate recent trend
-        double recent_trend = 0.0;
-        if (recent_scores.size() >= 20) {
-            int n = std::min(20, (int)recent_scores.size());
-            double recent_sum = 0.0, older_sum = 0.0;
-            for (int i = recent_scores.size() - n; i < (int)recent_scores.size(); i++) {
-                recent_sum += recent_scores[i];
-            }
-            if (recent_scores.size() >= 40) {
-                for (int i = recent_scores.size() - 40; i < (int)recent_scores.size() - 20; i++) {
-                    older_sum += recent_scores[i];
-                }
-                recent_trend = (recent_sum - older_sum) / n;
-            }
-        }
-        bool positive_trend = recent_trend > 2.0;
-        
-        // FIX: Slow down decay more aggressively when score is low or not improving
-        if (average_score < 100.0) {
-            // Very low score: decay 20x slower (0.999975 instead of 0.9995)
-            decay_rate = 0.999975;
-        } else if (average_score < 200.0) {
-            // Low score: decay 10x slower (0.99995 instead of 0.9995)
-            decay_rate = 0.99995;
-        } else if (average_score < 500.0) {
-            // Moderate score: decay 5x slower (0.9999 instead of 0.9995)
-            decay_rate = 0.9999;
-        } else if (average_score < 1000.0) {
-            // Good score but not great: decay 2x slower (0.99975 instead of 0.9995)
-            decay_rate = 0.99975;
-        }
-        // High score (>= 1000): use normal decay rate
-        
-        // FIX: Additional check - if score is not improving, slow down decay even more
-        if (improvement_percent < 0.5 && !positive_trend && total_games > 50) {
-            // Score not improving: slow down decay by another 2x
-            decay_rate = std::min(0.99999, decay_rate * 0.9995);  // Make decay even slower
-        }
-        
-        epsilon *= decay_rate;
+    if (epsilon > epsilon_min) {
+        epsilon *= epsilon_decay;
         if (epsilon < epsilon_min) {
             epsilon = epsilon_min;
         }
-        
-        // Log epsilon-score relationship periodically
-        if (total_games % 50 == 0) {
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[EPSILON-SCORE] Games: " << total_games 
-                        << " | Avg Score: " << average_score
-                        << " | Epsilon: " << epsilon
-                        << " | Decay Rate: " << decay_rate
-                        << " | Eps@100: " << (epsilon_at_score_100 >= 0 ? std::to_string(epsilon_at_score_100) : "N/A")
-                        << " | Eps@500: " << (epsilon_at_score_500 >= 0 ? std::to_string(epsilon_at_score_500) : "N/A")
-                        << " | Eps@1000: " << (epsilon_at_score_1000 >= 0 ? std::to_string(epsilon_at_score_1000) : "N/A")
-                        << std::endl;
-            }
-        }
+        epsilon_decrease_count++;
     }
     
-    // Only do performance-based updates if we have enough games for meaningful comparison
-    if (total_games < 10) {
-        // Too early, keep epsilon high for exploration
-        // Initialize previous_avg_score when we have enough data
-        if (total_games == 10 && average_score > 0.0) {
-            previous_avg_score = average_score;
-        }
-        return;
-    }
-    
-    // Initialize previous_avg_score if not set
-    if (previous_avg_score == 0.0 && average_score > 0.0) {
-        previous_avg_score = average_score;
-        return;
-    }
-    
-    // Use recent score trend instead of just comparing to previous average
-    // This is more responsive to actual learning progress
-    double recent_trend = 0.0;
-    if (recent_scores.size() >= 20) {
-        // Calculate trend over last 20 games
-        int n = std::min(20, (int)recent_scores.size());
-        double recent_sum = 0.0, older_sum = 0.0;
-        for (int i = recent_scores.size() - n; i < (int)recent_scores.size(); i++) {
-            recent_sum += recent_scores[i];
-        }
-        if (recent_scores.size() >= 40) {
-            // Compare to previous 20 games
-            for (int i = recent_scores.size() - 40; i < (int)recent_scores.size() - 20; i++) {
-                older_sum += recent_scores[i];
-            }
-            recent_trend = (recent_sum - older_sum) / n;  // Average improvement per game
-        }
-    }
-    
-    // Calculate improvement (use both average and trend)
-    double improvement = average_score - previous_avg_score;
-    double improvement_percent = 0.0;
-    if (previous_avg_score > 1.0) {  // Need meaningful baseline
-        improvement_percent = (improvement / previous_avg_score) * 100.0;
-    }
-    
-    // FIX: Make positive trend detection more strict - require significant improvement
-    // Also check if recent trend is positive (learning happening)
-    // Changed threshold from 0.5 to 2.0 to require more substantial improvement
-    bool positive_trend = recent_trend > 2.0;  // Average score improving by >2.0 per game (more strict)
-    
-    // Track epsilon before change
-    double epsilon_before = epsilon;
-    std::string change_reason = "";
-    
-    // FIX: Only decrease epsilon when there's REAL improvement, not just tiny changes
-    // Update epsilon based on performance (more responsive thresholds)
-    // Use both improvement_percent and recent_trend for better decisions
-    // Require BOTH significant improvement (>2%) AND positive trend for faster decay
-    if ((improvement_percent > 2.0 && positive_trend) || improvement_percent > 5.0) {
-        // Significant improvement (>2% with trend OR >5% overall): Faster decay (network is learning well)
-        if (epsilon > epsilon_min) {
-            epsilon *= 0.99;  // Faster decay when learning well (1% per update)
-            if (epsilon < epsilon_min) {
-                epsilon = epsilon_min;
-            }
-            change_reason = positive_trend ? "Significant positive trend" : "Major score improvement";
-            epsilon_decrease_count++;
-        }
-    } else if (improvement_percent > 1.0 && positive_trend) {
-        // Moderate improvement (>1% with trend): Normal decay (already applied above)
-        change_reason = "Moderate improvement";
-    } else if (improvement_percent < -1.0 && !positive_trend) {
-        // Performance degrading (>1% worse): Increase epsilon (need more exploration)
-        // BUT: Don't increase too aggressively to prevent oscillation
-        // Only increase if score is actually low, not just slightly worse
-        if (average_score < 300.0 || (average_score < previous_avg_score * 0.9)) {
-            // Significant degradation or low score - increase exploration
-            epsilon = std::min(1.0, epsilon * 1.10);  // Reduced from 1.15 to 1.10 (less aggressive)
-            // If epsilon was at minimum, jump to a moderate value (not too high)
-            if (epsilon <= epsilon_min * 1.2) {
-                epsilon = std::min(1.0, epsilon_min * 2.5);  // Reduced from 4.0 to 2.5 (0.125 instead of 0.20)
-            }
-            change_reason = "Score degrading";
-            epsilon_increase_count++;
-        } else {
-            // Small degradation but still good performance - don't increase epsilon
-            // This prevents oscillation when performance is still good
-            change_reason = "Minor degradation, maintaining";
-        }
-    } else {
-        // Small improvement or no change: Check if score is low and not improving
-        // If average score is very low (< 200) and not improving (no positive trend), increase exploration
-        if (average_score < 200.0 && improvement_percent < 0.5 && !positive_trend) {
-            // Low score and not improving significantly - need more exploration
-            double old_epsilon = epsilon;
-            epsilon = std::min(1.0, epsilon * 1.05);  // Small increase (5%)
-            // If epsilon is already at minimum, increase it
-            if (epsilon <= epsilon_min * 1.1) {
-                epsilon = std::min(1.0, epsilon_min * 3.0);  // Jump to 3x minimum (0.15) for exploration
-            }
-            if (epsilon > old_epsilon) {
-                change_reason = "Low score, not improving";
-                epsilon_increase_count++;
-            }
-        } else if (average_score < 100.0) {
-            // Very low score - definitely need more exploration
-            double old_epsilon = epsilon;
-            epsilon = std::min(1.0, epsilon * 1.08);  // Reduced from 1.1 to 1.08 (less aggressive)
-            if (epsilon <= epsilon_min * 1.2) {
-                epsilon = std::min(1.0, epsilon_min * 3.0);  // Reduced from 5.0 to 3.0 (0.15 instead of 0.25)
-            }
-            if (epsilon > old_epsilon) {
-                change_reason = "Very low score";
-                epsilon_increase_count++;
-            }
-        } else if (average_score > 500.0 && epsilon > epsilon_min * 1.5) {
-            // High performance achieved - prevent epsilon from increasing too much
-            // If we're performing well, don't let epsilon get too high even if there's a small dip
-            if (improvement_percent > -0.5) {
-                // Small dip but still good - don't increase epsilon
-                change_reason = "High performance, maintaining epsilon";
-            }
-        } else if (epsilon > epsilon_before) {
-            // Baseline decay already applied, but if it increased, count it
-            epsilon_decrease_count++;
-        }
-        // Otherwise, use normal baseline decay (already applied above)
-    }
-    
-    // Log epsilon changes for verification
-    if (std::abs(epsilon - epsilon_before) > 0.001) {  // Significant change
-        epsilon_change_reason = improvement_percent;
-        std::ofstream logfile("debug.log", std::ios::app);
-        if (logfile.is_open()) {
-            logfile << "[EPSILON] " << epsilon_before << " -> " << epsilon 
-                    << " | Score: " << average_score << " | Improvement: " 
-                    << improvement_percent << "% | Reason: " << change_reason << std::endl;
-        }
-    }
-    
-    last_epsilon = epsilon_before;
-    
-    // Safety check: Ensure epsilon never goes below epsilon_min
-    if (epsilon < epsilon_min) {
-        epsilon = epsilon_min;
-    }
-    
-    // Update previous average for next comparison (update more frequently for responsiveness)
-    // Update every 3 games or on significant change to be more responsive
-    if (std::abs(improvement_percent) > 1.0 || total_games % 3 == 0) {
-        previous_avg_score = average_score;
-    }
-    
-    // FIX: Convergence detection and epsilon reset for poor performance
-    // If average is very low and not improving, force more exploration
-    if (average_score < 100.0 && total_games > 50 && !positive_trend && improvement_percent < 0.0) {
-        // Very low score, many games played, no improvement - force more exploration
-        if (epsilon < epsilon_min * 2.0) {
-            epsilon = std::min(1.0, epsilon_min * 2.5);  // Increase exploration
-            change_reason = "Stuck at low score, forcing exploration";
-            epsilon_increase_count++;
-            
-            // Log this for debugging
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[EPSILON] Forced increase: " << epsilon_before << " -> " << epsilon
-                        << " | Avg: " << average_score << " | Trend: " << recent_trend
-                        << " | Games: " << total_games << std::endl;
-            }
-        }
-    }
-    
-    // FIX: Convergence detection - if performance is poor and epsilon is at minimum, reset epsilon
-    // This prevents getting stuck in poor strategies with no exploration
-    if (epsilon <= epsilon_min * 1.1 && average_score < 400.0 && total_games > 100) {
-        // Check if score has been stuck for a while
-        bool stuck = true;
-        if (recent_scores.size() >= 50) {
-            // Check if last 50 games show improvement
-            double recent_avg = 0.0;
-            double older_avg = 0.0;
-            for (int i = recent_scores.size() - 25; i < (int)recent_scores.size(); i++) {
-                recent_avg += recent_scores[i];
-            }
-            for (int i = recent_scores.size() - 50; i < (int)recent_scores.size() - 25; i++) {
-                older_avg += recent_scores[i];
-            }
-            recent_avg /= 25.0;
-            older_avg /= 25.0;
-            
-            // If recent average is better, not stuck
-            if (recent_avg > older_avg * 1.05) {  // 5% improvement
-                stuck = false;
-            }
-        }
-        
-        if (stuck) {
-            // Reset epsilon to allow more exploration
-            epsilon = std::min(0.5, epsilon_min * 3.0);  // Reset to 3x minimum (0.45)
-            change_reason = "Convergence reset: poor performance, increasing exploration";
-            epsilon_increase_count++;
-            
-            std::ofstream logfile("debug.log", std::ios::app);
-            if (logfile.is_open()) {
-                logfile << "[CONVERGENCE] Epsilon reset: " << epsilon_before << " -> " << epsilon
-                        << " | Avg: " << average_score << " | Games: " << total_games
-                        << " | Reason: Poor performance, stuck in local minimum" << std::endl;
-            }
-        }
-    }
+    previous_avg_score = average_score;
 }
 
 bool RLAgent::isStillLearning() const {
