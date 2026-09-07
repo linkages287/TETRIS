@@ -490,11 +490,23 @@ static bool prev_game_over_global = false;
 static bool prev_paused_global = false;
 static std::chrono::steady_clock::time_point game_over_start_time;
 static bool game_over_timer_active = false;
+static bool force_full_redraw = false;
+
+// Invalidate cached UI so the next drawBoard paints a clean layout (e.g. after resize).
+static void invalidateScreenCache() {
+    force_full_redraw = true;
+    prev_score_global = -1;
+    prev_lines_global = -1;
+    prev_level_global = -1;
+    prev_ai_enabled_global = !prev_ai_enabled_global;  // force AI status redraw
+    prev_training_mode_global = !prev_training_mode_global;
+    prev_game_over_global = false;
+    prev_paused_global = false;
+}
 
 void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, ParameterTuner* tuner = nullptr, bool score_graph_visible = false, bool stats_visible = false) {
     int height, width;
     getmaxyx(win, height, width);
-    (void)height;  // height not used, but required by getmaxyx macro
     
     // Static variables to store previous strings (prevents flickering)
     static std::string prev_stats_str1 = "";
@@ -507,35 +519,58 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
     static std::string prev_sat_str2 = "";
     static int prev_sat_color = -1;
     static std::string prev_tuner_str = "";
+    static int prev_term_width = -1;
+    static int prev_term_height = -1;
+    
+    // Terminal resize: clear ghosts left by the old layout and redraw everything.
+    bool layout_reset = force_full_redraw || width != prev_term_width || height != prev_term_height;
+    if (layout_reset) {
+        erase();
+        prev_stats_str1.clear();
+        prev_stats_str2.clear();
+        prev_epsilon_str1.clear();
+        prev_epsilon_str2.clear();
+        prev_weight_stats.clear();
+        prev_weight_lines.clear();
+        prev_sat_str1.clear();
+        prev_sat_str2.clear();
+        prev_sat_color = -1;
+        prev_tuner_str.clear();
+        prev_score_global = -1;
+        prev_lines_global = -1;
+        prev_level_global = -1;
+        prev_ai_enabled_global = !game.ai_enabled;
+        prev_training_mode_global = !game.training_mode;
+        prev_term_width = width;
+        prev_term_height = height;
+        force_full_redraw = false;
+    }
     
     // Reset attributes to normal
     attrset(0);
     
-    // Board dimensions
+    // Board dimensions (recomputed every frame from current terminal size)
     int board_x = width / 2 - game.WIDTH / 2 - 1;
     int board_y = 2;
+    if (board_x < 1) board_x = 1;
     
-    // Draw board border (only once)
-    static bool border_drawn = false;
-    if (!border_drawn) {
-        mvaddch(board_y - 1, board_x - 1, '+');
-        for (int i = 0; i < game.WIDTH * 2; i++) {
-            addch('-');
-        }
-        addch('+');
-        
-        for (int y = 0; y < game.HEIGHT; y++) {
-            mvaddch(board_y + y, board_x - 1, '|');
-            mvaddch(board_y + y, board_x + game.WIDTH * 2, '|');
-        }
-        
-        mvaddch(board_y + game.HEIGHT, board_x - 1, '+');
-        for (int i = 0; i < game.WIDTH * 2; i++) {
-            addch('-');
-        }
-        addch('+');
-        border_drawn = true;
+    // Always redraw border so it stays aligned after resize
+    mvaddch(board_y - 1, board_x - 1, '+');
+    for (int i = 0; i < game.WIDTH * 2; i++) {
+        addch('-');
     }
+    addch('+');
+    
+    for (int y = 0; y < game.HEIGHT; y++) {
+        mvaddch(board_y + y, board_x - 1, '|');
+        mvaddch(board_y + y, board_x + game.WIDTH * 2, '|');
+    }
+    
+    mvaddch(board_y + game.HEIGHT, board_x - 1, '+');
+    for (int i = 0; i < game.WIDTH * 2; i++) {
+        addch('-');
+    }
+    addch('+');
     
     // ALWAYS redraw game board section (for smooth piece movement)
     // Draw placed blocks
@@ -572,11 +607,18 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
     static int prev_preview_y = -1;
     static bool prev_score_graph_visible = false;
     
+    // After a full screen clear, forget the old preview slot
+    if (layout_reset) {
+        prev_preview_x = -1;
+        prev_preview_y = -1;
+    }
+    
     int preview_x, preview_y;
     if (score_graph_visible) {
-        // Place next piece on the left side (near score info) when graph is visible
-        preview_x = board_x - 15;
-        preview_y = board_y + 9;  // 3 lines down from previous position (was board_y + 6, now board_y + 9)
+        // Place next piece on the left side below the score HUD when graph is visible
+        preview_x = board_x - 18;
+        if (preview_x < 0) preview_x = 0;
+        preview_y = board_y + 11;
     } else {
         // Place next piece on the right side when graph is not visible
         preview_x = board_x + game.WIDTH * 2 + 5;
@@ -625,65 +667,66 @@ void drawBoard(WINDOW* win, TetrisGame& game, RLAgent* agent = nullptr, Paramete
         }
     }
     
-    // Draw score and stats (only update if changed)
-    int info_x = board_x - 15;
-    int info_y = board_y + 2;
+    // Score / lines / level HUD — fixed-width fields so shorter values after a
+    // reset cannot leave leftover digits from the previous round.
+    const int hud_w = 16;  // inner content width between borders
+    int info_x = board_x - (hud_w + 2) - 2;
+    if (info_x < 0) info_x = 0;
+    int info_y = board_y + 1;
     
-    // Clear and redraw score field when it changes (to avoid overlapping text)
-    if (prev_score_global != game.score) {
-        char score_str[50];
-        snprintf(score_str, sizeof(score_str), "Score: %d", game.score);
-        // Clear enough space for long numbers (e.g., "Score: 999999")
-        mvaddstr(info_y, info_x, "Score:        ");
-        mvaddstr(info_y, info_x, score_str);
+    bool hud_dirty = (prev_score_global != game.score ||
+                      prev_lines_global != game.lines_cleared ||
+                      prev_level_global != game.level);
+    if (hud_dirty) {
+        char line[32];
+        auto hudRow = [&](int row, const char* label, int value, int color_pair) {
+            // Right-aligned number in a fixed field clears any longer previous value
+            snprintf(line, sizeof(line), "| %-5s %8d |", label, value);
+            mvaddstr(info_y + row, info_x, line);
+            mvchgat(info_y + row, info_x + 8, 8, A_BOLD, color_pair, NULL);
+        };
+        
+        mvaddstr(info_y,     info_x, "+----------------+");
+        hudRow(1, "SCORE", game.score, 2);           // yellow
+        hudRow(2, "LINES", game.lines_cleared, 1);  // cyan
+        hudRow(3, "LEVEL", game.level, 4);          // green
+        mvaddstr(info_y + 4, info_x, "+----------------+");
+        
         prev_score_global = game.score;
-    }
-    
-    if (prev_lines_global != game.lines_cleared) {
-        char lines_str[50];
-        snprintf(lines_str, sizeof(lines_str), "Lines: %d", game.lines_cleared);
-        mvaddstr(info_y + 1, info_x, lines_str);
         prev_lines_global = game.lines_cleared;
-    }
-    
-    if (prev_level_global != game.level) {
-        char level_str[50];
-        snprintf(level_str, sizeof(level_str), "Level: %d", game.level);
-        mvaddstr(info_y + 2, info_x, level_str);
         prev_level_global = game.level;
     }
     
+    int ai_y = info_y + 5;
     if (prev_ai_enabled_global != game.ai_enabled || prev_training_mode_global != game.training_mode) {
+        // Clear full HUD width so TRAINING ↔ ON/OFF never overlap
+        mvaddstr(ai_y, info_x, "                  ");
         if (game.ai_enabled) {
             if (game.training_mode) {
-                mvaddstr(info_y + 3, info_x, "AI: TRAINING");
-                mvchgat(info_y + 3, info_x, 13, A_BOLD | A_REVERSE, 1, NULL);
+                mvaddstr(ai_y, info_x, "AI: TRAINING");
+                mvchgat(ai_y, info_x, 12, A_BOLD | A_REVERSE, 1, NULL);
             } else {
-                mvaddstr(info_y + 3, info_x, "AI: ON");
-                mvchgat(info_y + 3, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
+                mvaddstr(ai_y, info_x, "AI: ON");
+                mvchgat(ai_y, info_x, 6, A_BOLD | A_REVERSE, 0, NULL);
             }
         } else {
-            mvaddstr(info_y + 3, info_x, "AI: OFF");
+            mvaddstr(ai_y, info_x, "AI: OFF");
         }
         prev_ai_enabled_global = game.ai_enabled;
         prev_training_mode_global = game.training_mode;
     }
     
-    // Draw controls (only once)
-    static bool controls_drawn = false;
+    // Always redraw controls so they track the board after resize
     int controls_y = board_y + game.HEIGHT + 2;
-    if (!controls_drawn) {
-        mvaddstr(controls_y, board_x, "Controls:");
-        mvaddstr(controls_y + 1, board_x, "Left/Right: Move");
-        mvaddstr(controls_y + 2, board_x, "Up: Rotate");
-        mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
-        mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
-        mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
-        mvaddstr(controls_y + 6, board_x, "T: Training Mode");
-        mvaddstr(controls_y + 7, board_x, "S: Score Graph  V: Stats");
-        mvaddstr(controls_y + 8, board_x, "P: Pause  Q: Quit");
-        controls_drawn = true;
-    }
+    mvaddstr(controls_y, board_x, "Controls:");
+    mvaddstr(controls_y + 1, board_x, "Left/Right: Move");
+    mvaddstr(controls_y + 2, board_x, "Up: Rotate");
+    mvaddstr(controls_y + 3, board_x, "Down: Soft Drop");
+    mvaddstr(controls_y + 4, board_x, "Space: Hard Drop");
+    mvaddstr(controls_y + 5, board_x, "A: Toggle AI");
+    mvaddstr(controls_y + 6, board_x, "T: Training Mode");
+    mvaddstr(controls_y + 7, board_x, "S: Score Graph  V: Stats");
+    mvaddstr(controls_y + 8, board_x, "P: Pause  Q: Quit");
     
     // Clear stats area if stats are hidden (to prevent leftover text)
     static bool prev_stats_visible = false;
@@ -1089,71 +1132,124 @@ void drawScoreGraph(RLAgent* agent) {
     mvaddstr(graph_y + graph_height + 2, graph_x + graph_width / 2 - 5, "Time (games)");
 }
 
+static int countWellCells(const TetrisGame& game, const std::vector<std::vector<int>>& board) {
+    int wells = 0;
+    for (int x = 0; x < game.WIDTH; x++) {
+        int depth = 0;
+        for (int y = 0; y < game.HEIGHT; y++) {
+            if (board[y][x] == 0) {
+                bool left_wall = (x == 0) || (board[y][x - 1] != 0);
+                bool right_wall = (x == game.WIDTH - 1) || (board[y][x + 1] != 0);
+                if (left_wall && right_wall) {
+                    depth++;
+                    wells += depth;
+                } else {
+                    depth = 0;
+                }
+            } else {
+                depth = 0;
+            }
+        }
+    }
+    return wells;
+}
+
 static double computePlacementReward(const TetrisGame& game, int lines_before,
-                                     int holes_before, int agg_before) {
-    double reward = 1.0;  // Survived another piece
+                                     int holes_before, int agg_before,
+                                     int bump_before, int wells_before) {
+    // Shaped reward aligned with the board heuristic the policy also uses.
+    double reward = 0.5;  // Survived another piece
     int lines_diff = game.lines_cleared - lines_before;
     if (lines_diff > 0) {
-        reward += lines_diff * 12.0;
-        if (lines_diff > 1) reward += (lines_diff - 1) * 6.0;
-        if (lines_diff >= 4) reward += 20.0;
+        reward += lines_diff * 10.0;
+        if (lines_diff > 1) reward += (lines_diff - 1) * 8.0;
+        if (lines_diff >= 4) reward += 40.0;  // Strong Tetris bonus
     }
     
     int holes_after = game.countHoles(game.board);
-    reward -= (holes_after - holes_before) * 5.0;
+    reward -= (holes_after - holes_before) * 6.0;
     
     int agg_after = game.getAggregateHeight(game.board);
-    reward -= (agg_after - agg_before) * 0.2;
+    reward -= (agg_after - agg_before) * 0.35;
+    
+    int bump_after = game.calculateBumpiness(game.board);
+    reward -= (bump_after - bump_before) * 0.45;
+    
+    int wells_after = countWellCells(game, game.board);
+    reward -= (wells_after - wells_before) * 0.8;
     
     int max_height = 0;
     for (int x = 0; x < game.WIDTH; x++) {
         max_height = std::max(max_height, game.getColumnHeight(x, game.board));
     }
-    if (max_height > 15) {
-        reward -= (max_height - 15) * 1.5;
+    if (max_height > 14) {
+        reward -= (max_height - 14) * 1.2;
     }
     
     if (game.game_over) {
-        reward -= 40.0;
+        reward -= 50.0;
     }
     return reward;
 }
 
+static void trainFromBuffer(RLAgent& agent, int passes) {
+    if (agent.replay_buffer.size() < RLAgent::BATCH_SIZE) return;
+    for (int i = 0; i < passes; i++) {
+        agent.train();
+    }
+}
+
 static void recordTrainingTransition(TetrisGame& game, RLAgent& agent,
                                      std::vector<double>& pending_state, bool& has_pending,
-                                     int lines_before, int holes_before, int agg_before) {
+                                     double& pending_reward,
+                                     int lines_before, int holes_before, int agg_before,
+                                     int bump_before, int wells_before) {
     if (!game.training_mode) return;
     
-    double reward = computePlacementReward(game, lines_before, holes_before, agg_before);
-    std::vector<double> next_state(NeuralNetwork::INPUT_SIZE, 0.0);
-    if (!game.game_over) {
-        next_state = agent.extractState(game);
+    double reward = computePlacementReward(game, lines_before, holes_before, agg_before,
+                                           bump_before, wells_before);
+    
+    // After-state of the move just executed (board + piece that will be placed next).
+    std::vector<double> after_state(NeuralNetwork::INPUT_SIZE, 0.0);
+    if (game.game_over) {
+        after_state = agent.extractStateFromBoard(game.board, game.lines_cleared, game.level, nullptr);
+    } else {
+        after_state = agent.extractState(game);
     }
     
+    // Correct after-state TD: V(s_after) learns from the reward earned by reaching it,
+    // bootstrapping from the next after-state. Do NOT pair the previous state with
+    // the current reward (that was the old credit-assignment bug).
     if (has_pending && !pending_state.empty()) {
         Experience exp;
         exp.state = pending_state;
         exp.action_rotation = 0;
         exp.action_x = 0;
-        exp.reward = reward;
-        exp.next_state = next_state;
-        exp.done = game.game_over;
+        exp.reward = pending_reward;
+        exp.next_state = after_state;
+        exp.done = false;
         agent.addExperience(exp);
-        
-        if (agent.replay_buffer.size() >= RLAgent::BATCH_SIZE) {
-            agent.train();
-            if (game.game_over) {
-                agent.train();
-            }
-        }
+        trainFromBuffer(agent, 1);
     }
     
-    if (!game.game_over) {
-        pending_state = next_state;
-        has_pending = true;
-    } else {
+    if (game.game_over) {
+        // Terminal after-state: no bootstrap, just the terminal reward.
+        Experience term;
+        term.state = after_state;
+        term.action_rotation = 0;
+        term.action_x = 0;
+        term.reward = reward;
+        term.next_state.assign(NeuralNetwork::INPUT_SIZE, 0.0);
+        term.done = true;
+        agent.addExperience(term);
+        trainFromBuffer(agent, 8);  // Extra passes to digest the episode
         pending_state.clear();
+        pending_reward = 0.0;
         has_pending = false;
+    } else {
+        pending_state = after_state;
+        pending_reward = reward;
+        has_pending = true;
     }
     
     game.last_score = game.score;
@@ -1161,17 +1257,21 @@ static void recordTrainingTransition(TetrisGame& game, RLAgent& agent,
 }
 
 static void playAITurn(TetrisGame& game, RLAgent& agent,
-                       std::vector<double>& pending_state, bool& has_pending) {
+                       std::vector<double>& pending_state, bool& has_pending,
+                       double& pending_reward) {
     if (game.current_piece == nullptr || game.game_over || game.paused) return;
     
     int lines_before = game.lines_cleared;
     int holes_before = game.countHoles(game.board);
     int agg_before = game.getAggregateHeight(game.board);
+    int bump_before = game.calculateBumpiness(game.board);
+    int wells_before = countWellCells(game, game.board);
     
     RLAgent::Move best_move = agent.findBestMove(game, game.training_mode);
     game.executeAIMove(best_move.rotation, best_move.x);
-    recordTrainingTransition(game, agent, pending_state, has_pending,
-                             lines_before, holes_before, agg_before);
+    recordTrainingTransition(game, agent, pending_state, has_pending, pending_reward,
+                             lines_before, holes_before, agg_before,
+                             bump_before, wells_before);
 }
 
 static void finishEpisode(TetrisGame& game, RLAgent& agent, ParameterTuner* tuner) {
@@ -1224,8 +1324,10 @@ static int runHeadlessTraining(RLAgent& agent, int max_games, bool fresh_model) 
     game.training_mode = true;
     game.ai_enabled = true;
     
-    std::vector<double> pending_state = agent.extractState(game);
-    bool has_pending = true;
+    // Start with no pending after-state: the first placement creates one.
+    std::vector<double> pending_state;
+    bool has_pending = false;
+    double pending_reward = 0.0;
     
     std::cout << "Headless training: " << max_games << " games"
               << (agent.model_loaded ? " (loaded model)" : " (fresh network)") << "\n";
@@ -1237,7 +1339,7 @@ static int runHeadlessTraining(RLAgent& agent, int max_games, bool fresh_model) 
             game.spawnPiece();
         }
         if (!game.game_over) {
-            playAITurn(game, agent, pending_state, has_pending);
+            playAITurn(game, agent, pending_state, has_pending, pending_reward);
         }
         
         if (game.game_over) {
@@ -1260,8 +1362,9 @@ static int runHeadlessTraining(RLAgent& agent, int max_games, bool fresh_model) 
             game.reset();
             game.training_mode = true;
             game.ai_enabled = true;
-            pending_state = agent.extractState(game);
-            has_pending = true;
+            pending_state.clear();
+            has_pending = false;
+            pending_reward = 0.0;
         }
     }
     
@@ -1360,8 +1463,9 @@ int main(int argc, char* argv[]) {
     game.training_mode = true;
     game.ai_enabled = true;
     
-    std::vector<double> pending_state = agent.extractState(game);
-    bool has_pending = true;
+    std::vector<double> pending_state;
+    bool has_pending = false;
+    double pending_reward = 0.0;
     
     // Game loop with debugging
     int loop_count = 0;
@@ -1414,7 +1518,12 @@ int main(int argc, char* argv[]) {
         // Handle input
         int key = getch();
         
-        if (key == 'q' || key == 'Q') {
+        if (key == KEY_RESIZE) {
+            // ncurses updated COLS/LINES; wipe caches so drawBoard rebuilds layout
+            invalidateScreenCache();
+            clear();
+            refresh();
+        } else if (key == 'q' || key == 'Q') {
             break;
         } else if (key == 'p' || key == 'P') {
             game.paused = !game.paused;
@@ -1452,7 +1561,7 @@ int main(int argc, char* argv[]) {
                 current_time - game.last_ai_time).count();
             int ai_delay_ms = game.training_mode ? 20 : 80;
             if (ai_elapsed >= ai_delay_ms) {
-                playAITurn(game, agent, pending_state, has_pending);
+                playAITurn(game, agent, pending_state, has_pending, pending_reward);
                 if (game.training_mode && agent.training_episodes > 0) {
                     tuner.recordError(agent.last_batch_error);
                     tuner.recordEpsilon(agent.epsilon);
@@ -1466,8 +1575,9 @@ int main(int argc, char* argv[]) {
             debugLog("Game over - restarting");
             finishEpisode(game, agent, &tuner);
             game.reset();
-            pending_state = agent.extractState(game);
-            has_pending = true;
+            pending_state.clear();
+            has_pending = false;
+            pending_reward = 0.0;
             napms(80);
             prev_score_global = -1;
             prev_lines_global = -1;

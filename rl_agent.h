@@ -27,7 +27,7 @@ public:
     std::vector<std::vector<double>> weights2;  // Hidden to output
     std::vector<double> bias2;                  // Output bias
     
-    // After-state features: 10 column heights + 3 board quality + 7 upcoming piece + 7 reserved
+    // After-state features: 10 heights + max/holes/bump + 7 piece + well/mean/range + 4 reserved
     static const int INPUT_SIZE = 27;
     static const int HIDDEN_SIZE = 64;
     static const int OUTPUT_SIZE = 1;  // After-state value

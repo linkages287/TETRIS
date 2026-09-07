@@ -540,25 +540,6 @@ std::string NeuralNetwork::getWeightStatsString(int episode, double error, bool 
         weights2_std = std::sqrt(weights2_std / weights2_count);
     }
     
-    double bias1_mean = 0.0, bias1_min = 0.0, bias1_max = 0.0;
-    int bias1_count = 0;
-    bool bias1_initialized = false;
-    for (double b : bias1) {
-        if (std::isfinite(b)) {
-            if (!bias1_initialized) {
-                bias1_min = bias1_max = b;
-                bias1_initialized = true;
-            }
-            bias1_mean += b;
-            bias1_min = std::min(bias1_min, b);
-            bias1_max = std::max(bias1_max, b);
-            bias1_count++;
-        }
-    }
-    if (bias1_count > 0) {
-        bias1_mean /= bias1_count;
-    }
-    
     // Calculate saturation metrics
     SaturationMetrics sat = calculateSaturation();
     
@@ -581,11 +562,11 @@ std::string NeuralNetwork::getWeightStatsString(int episode, double error, bool 
 // RL Agent Implementation
 RLAgent::RLAgent(const std::string& model_file) 
     : epsilon(1.0),
-    epsilon_min(0.08),
-    epsilon_decay(0.997),
-    learning_rate(0.001),
-    gamma(0.95),
-    heuristic_weight(6.0),
+    epsilon_min(0.05),
+    epsilon_decay(0.995),
+    learning_rate(0.0015),
+    gamma(0.99),
+    heuristic_weight(2.0),
     training_episodes(0),
     total_games(0),
     best_score(0),
@@ -683,8 +664,9 @@ std::vector<double> RLAgent::extractState(const TetrisGame& game) {
 std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector<int>>& sim_board, 
                                                     int /*lines_cleared*/, int /*level*/, 
                                                     const TetrisPiece* upcoming_piece) const {
-    // After-state: board quality + the upcoming piece in the current-piece slots.
-    // The last 7 features stay zero so evaluation and training use the same layout.
+    // After-state: board quality + upcoming piece + compact board stats.
+    // Layout (27): 10 heights | max | holes | bumpiness | 7 piece one-hot
+    //             | well | mean | range | 4 reserved
     std::vector<double> state(NeuralNetwork::INPUT_SIZE, 0.0);
     int idx = 0;
     const int WIDTH = TetrisGame::WIDTH;
@@ -692,6 +674,8 @@ std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector
     
     std::vector<int> column_heights(WIDTH);
     int max_height = 0;
+    int min_height = HEIGHT;
+    int height_sum = 0;
     
     for (int x = 0; x < WIDTH; x++) {
         int height = 0;
@@ -703,6 +687,8 @@ std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector
         }
         column_heights[x] = height;
         max_height = std::max(max_height, height);
+        min_height = std::min(min_height, height);
+        height_sum += height;
         state[idx++] = height / 20.0;
     }
     
@@ -730,7 +716,19 @@ std::vector<double> RLAgent::extractStateFromBoard(const std::vector<std::vector
     for (int i = 0; i < 7; i++) {
         state[idx++] = (upcoming_piece && upcoming_piece->type == i) ? 1.0 : 0.0;
     }
-    for (int i = 0; i < 7; i++) {
+    
+    // Deepest well (critical for I-piece / Tetris setups)
+    int deepest_well = 0;
+    for (int x = 0; x < WIDTH; x++) {
+        int left = (x == 0) ? HEIGHT : column_heights[x - 1];
+        int right = (x == WIDTH - 1) ? HEIGHT : column_heights[x + 1];
+        int well = std::min(left, right) - column_heights[x];
+        if (well > deepest_well) deepest_well = well;
+    }
+    state[idx++] = std::min(1.0, deepest_well / 20.0);
+    state[idx++] = (height_sum / (double)WIDTH) / 20.0;
+    state[idx++] = (max_height - min_height) / 20.0;
+    while (idx < NeuralNetwork::INPUT_SIZE) {
         state[idx++] = 0.0;
     }
     
@@ -899,13 +897,21 @@ RLAgent::Move RLAgent::findBestMove(const TetrisGame& game, bool training) {
         return best;
     }
     
+    // Anneal heuristic dominance so the learned value can take over over time.
+    double hw = heuristic_weight;
+    if (total_games > 50) {
+        double t = std::min(1.0, (total_games - 50) / 2500.0);
+        hw = heuristic_weight * (1.0 - 0.65 * t);  // 2.0 → ~0.7
+    }
+    
     Move best_move = {placements[0].rotation, placements[0].x, -1e9};
     for (auto& p : placements) {
         std::vector<double> after_state = extractStateFromBoard(
             p.board, 0, 0, game.next_piece);
         double q_value = q_network.forward(after_state);
         q_value = std::max(-200.0, std::min(200.0, q_value));
-        p.value = heuristic_weight * p.heuristic + q_value;
+        // Residual blend: heuristic guides early play; network learns corrections.
+        p.value = hw * p.heuristic + q_value;
         if (p.value > best_move.q_value) {
             best_move.rotation = p.rotation;
             best_move.x = p.x;
@@ -1051,6 +1057,7 @@ void RLAgent::train() {
                         << " | Min: " << batch_min_error
                         << " | Max: " << batch_max_error
                         << " | Std: " << error_std
+                        << " | Valid: " << valid_updates << "/" << total_samples
                         << " | Clipped: " << clipped_errors << "/" << total_samples
                         << " | Target Range: [" << min_target << ", " << max_target << "]"
                         << " | Predicted Range: [" << min_predicted << ", " << max_predicted << "]"
@@ -1284,6 +1291,54 @@ void RLAgent::saveModelToFile(const std::string& filename) {
     }
 }
 
+namespace {
+
+// Format integer with thousands separators, e.g. 495800 -> "495,800"
+std::string formatScore(int score) {
+    std::string raw = std::to_string(score);
+    std::string out;
+    int digits = 0;
+    for (int i = (int)raw.size() - 1; i >= 0; --i) {
+        if (digits > 0 && digits % 3 == 0) {
+            out.push_back(',');
+        }
+        out.push_back(raw[i]);
+        ++digits;
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
+void printBestScoreBanner(std::ostream& out, int current_score,
+                          int previous_score, const std::string& previous_file,
+                          const std::string& saved_file) {
+    const std::string bar(62, '=');
+    out << "\n" << bar << "\n";
+    out << "  NEW BEST SCORE\n";
+    out << bar << "\n";
+    out << "  Score:        " << formatScore(current_score) << "\n";
+    if (previous_score >= 0) {
+        int delta = current_score - previous_score;
+        double pct = (previous_score > 0)
+            ? (100.0 * delta / previous_score)
+            : 0.0;
+        std::ostringstream pct_ss;
+        pct_ss << std::fixed << std::setprecision(1) << pct;
+        out << "  Previous:     " << formatScore(previous_score)
+            << "  (+" << formatScore(delta)
+            << " / +" << pct_ss.str() << "%)\n";
+        if (!previous_file.empty()) {
+            out << "  Beat file:    " << previous_file << "\n";
+        }
+    } else {
+        out << "  Previous:     (none)\n";
+    }
+    out << "  Saved to:     " << saved_file << "\n";
+    out << bar << "\n" << std::endl;
+}
+
+}  // namespace
+
 int RLAgent::readBestScoreFromFile(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -1356,8 +1411,10 @@ void RLAgent::saveBestModelIfBetter(int current_score) {
         // Current score is not better, don't save
         std::ofstream logfile("debug.log", std::ios::app);
         if (logfile.is_open()) {
-            logfile << "[BEST] Score " << current_score << " not better than existing best " 
-                    << best_existing_score << " (" << best_existing_file << ") - skipping save" << std::endl;
+            logfile << "[BEST] Score " << formatScore(current_score)
+                    << " not better than existing best "
+                    << formatScore(best_existing_score)
+                    << " (" << best_existing_file << ") - skipping save" << std::endl;
         }
         return;
     }
@@ -1377,21 +1434,14 @@ void RLAgent::saveBestModelIfBetter(int current_score) {
     // Save the model
     saveModelToFile(best_model_file);
     
-    // Log the save
+    // Log and print a clear multi-line banner
     std::ofstream logfile("debug.log", std::ios::app);
     if (logfile.is_open()) {
-        logfile << "[BEST] New best score: " << current_score;
-        if (best_existing_score >= 0) {
-            logfile << " (previous best: " << best_existing_score << " from " << best_existing_file << ")";
-        }
-        logfile << " | Saved to " << best_model_file << std::endl;
+        printBestScoreBanner(logfile, current_score, best_existing_score,
+                             best_existing_file, best_model_file);
     }
-    
-    std::cout << "[BEST] New best score: " << current_score;
-    if (best_existing_score >= 0) {
-        std::cout << " (previous best: " << best_existing_score << " from " << best_existing_file << ")";
-    }
-    std::cout << " | Saved to " << best_model_file << std::endl;
+    printBestScoreBanner(std::cout, current_score, best_existing_score,
+                         best_existing_file, best_model_file);
 }
 
 void RLAgent::saveBestModelWithDate() {
@@ -1414,14 +1464,20 @@ void RLAgent::saveBestModelWithDate() {
     // Save the model
     saveModelToFile(best_model_file);
     
-    // Log the save
+    const std::string bar(62, '=');
+    auto writeSnapshot = [&](std::ostream& out) {
+        out << "\n" << bar << "\n";
+        out << "  BEST MODEL SNAPSHOT\n";
+        out << bar << "\n";
+        out << "  Best score:   " << formatScore(best_score) << "\n";
+        out << "  Saved to:     " << best_model_file << "\n";
+        out << bar << "\n" << std::endl;
+    };
+    
     std::ofstream logfile("debug.log", std::ios::app);
     if (logfile.is_open()) {
-        logfile << "[BEST] Saved best model on program start/exit: " << best_model_file 
-                << " | Best Score: " << best_score << std::endl;
+        writeSnapshot(logfile);
     }
-    
-    std::cout << "[BEST] Saved best model: " << best_model_file 
-              << " | Best Score: " << best_score << std::endl;
+    writeSnapshot(std::cout);
 }
 
